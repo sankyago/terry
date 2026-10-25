@@ -1,6 +1,6 @@
 import type { ModeProgress, RunResult } from '../storage/storage';
 import { EXAM_MAX_MISTAKES } from '../storage/storage';
-import type { Ticket } from '../tickets/tickets';
+import type { Ticket } from '../tickets/types';
 import { formatTime } from './format';
 import { CheckIcon, CrossIcon, RestartIcon } from './icons';
 
@@ -47,7 +47,7 @@ export function Results({ result, tickets, progress, onRetry, onSwitchMode, onMe
         </div>
         {exam && (
           <p className="muted tiny">
-            Критерій: не більше {EXAM_MAX_MISTAKES} помилки. Складено {progress.passes} з {progress.attempts} спроб.
+            Критерій: не більше {EXAM_MAX_MISTAKES} помилок. Складено {progress.passes} з {progress.attempts} спроб.
           </p>
         )}
 

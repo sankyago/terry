@@ -4,8 +4,8 @@ import { Mesh } from '@babylonjs/core/Meshes/mesh';
 import { MeshBuilder } from '@babylonjs/core/Meshes/meshBuilder';
 import type { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial';
 import { CITY } from '../config';
-import type { LightColor, LightState } from '../sim/city';
-import { CROSSWALKS, DRIVEWAYS, GIVE_WAY_LINES, SIGNALS, SIGNS, YARD } from '../sim/city';
+import type { LightColor, LightState, WorldFeatures } from '../sim/city';
+import { DRIVEWAYS, YARD } from '../sim/city';
 import { forwardOf, rightOf } from '../sim/math';
 import { seededRandom } from '../sim/random';
 import type { V3 } from './geometry';
@@ -54,12 +54,18 @@ export class TrafficLightView {
   private last = '';
   constructor(private lamps: Map<string, StandardMaterial>) {}
 
-  update(lights: Record<string, LightState>) {
-    const key = JSON.stringify(lights);
+  /** clock — для миготливого жовтого (раз на секунду). */
+  update(lights: Record<string, LightState>, clock = 0) {
+    const blink = Math.floor(clock * 2) % 2 === 0;
+    const key = JSON.stringify(lights) + blink;
     if (key === this.last) return;
     this.last = key;
     const litOf = (c: LightColor, lamp: 'red' | 'yellow' | 'green') =>
-      lamp === 'red' ? c === 'red' || c === 'redYellow' : lamp === 'yellow' ? c === 'yellow' || c === 'redYellow' : c === 'green';
+      lamp === 'red'
+        ? c === 'red' || c === 'redYellow'
+        : lamp === 'yellow'
+          ? c === 'yellow' || c === 'redYellow' || (c === 'flash' && blink)
+          : c === 'green';
     for (const [id, st] of Object.entries(lights))
       for (const axis of ['ns', 'ew'] as const)
         for (const lamp of ['red', 'yellow', 'green'] as const) {
@@ -71,6 +77,8 @@ export class TrafficLightView {
 
 export interface CityView {
   trafficLights: TrafficLightView;
+  /** Прибирає все місто зі сцени (перед побудовою міста для нового маршруту). */
+  dispose(): void;
 }
 
 const RX = CITY.roadsX;
@@ -80,7 +88,10 @@ const SW = CITY.sidewalk;
 const CURB = CITY.curbHeight;
 const MARK_Y = 0.03;
 
-export function buildCity(scene: Scene, shadows: boolean): CityView {
+/** Місто для конкретного маршруту: квартали однакові, а знаки, світлофори й розмітка — з плану. */
+export function buildCity(scene: Scene, shadows: boolean, world: WorldFeatures): CityView {
+  const meshesBefore = new Set(scene.meshes);
+  const materialsBefore = new Set(scene.materials);
   const b = new Batcher();
   const m = (name: string, hex: string, emissive = 0.12) => makeMaterial(scene, name, hex, emissive);
   const mats = {
@@ -117,6 +128,8 @@ export function buildCity(scene: Scene, shadows: boolean): CityView {
     signRed: m('signRed', COLORS.signRed, 0.3),
     signYellow: m('signYellow', COLORS.signYellow, 0.3),
     signWhite: m('signWhite', COLORS.signWhite, 0.45),
+    signBlack: m('signBlack', '#1d2125', 0.1),
+    coneOrange: m('coneOrange', '#f07a1a', 0.3),
     carParts: {
       glass: m('pGlass', COLORS.carGlass, 0.08),
       tyre: m('pTyre', COLORS.tyre, 0.02),
@@ -129,7 +142,7 @@ export function buildCity(scene: Scene, shadows: boolean): CityView {
       bodies: ['#c9d1d6', '#3f4a52', '#9b2f2f', '#2f5f9b', '#e8e2d4', '#55606a', '#6c8f5a', '#1f2326'].map((c, i) => m(`pBody${i}`, c, 0.14)),
     },
   };
-  for (const k of ['signBlue', 'signRed', 'signYellow', 'signWhite'] as const) mats[k].backFaceCulling = false;
+  for (const k of ['signBlue', 'signRed', 'signYellow', 'signWhite', 'signBlack'] as const) mats[k].backFaceCulling = false;
   const rnd = seededRandom(23);
   // Деталізовані частини (вікна, кузови, бордюри) — одна сітка на матеріал.
   const geos = new Map<StandardMaterial, FlatGeometry>();
@@ -153,21 +166,14 @@ export function buildCity(scene: Scene, shadows: boolean): CityView {
   };
 
   // Земля й асфальт усього міста (квартали лежать зверху).
-  flat(-260, -260, 440, 440, -0.02, mats.grass);
+  flat(RX[0] - 170, RZ[0] - 170, RX[RX.length - 1] + 170, RZ[RZ.length - 1] + 170, -0.02, mats.grass);
   const minR = RX[0] - HW;
   const maxR = RX[RX.length - 1] + HW;
   flat(minR, RZ[0] - HW, maxR, RZ[RZ.length - 1] + HW, 0, mats.asphalt);
 
-  /** Біля перехресть маршруту будинків немає: з камери під 45° вони закривали б учасників ситуацій. */
-  const openAreas = [
-    { x: 90, z: 90 },
-    { x: 180, z: 90 },
-    { x: 180, z: 180 },
-    { x: 90, z: 180 },
-    { x: 0, z: 180 },
-  ];
+  /** Біля місць ситуацій будинків немає: з камери під 45° вони закривали б учасників. */
   const blocked = (x0: number, z0: number, x1: number, z1: number) =>
-    openAreas.some((c) => Math.hypot(Math.max(x0 - c.x, 0, c.x - x1), Math.max(z0 - c.z, 0, c.z - z1)) < 34);
+    world.open.some((c) => Math.hypot(Math.max(x0 - c.x, 0, c.x - x1), Math.max(z0 - c.z, 0, c.z - z1)) < c.r);
 
   // ---------- Квартали ----------
   const isYard = (i: number, j: number) => RX[i] === 0 && RZ[j] === 0;
@@ -510,7 +516,8 @@ export function buildCity(scene: Scene, shadows: boolean): CityView {
   }
 
   // ---------- Розмітка ----------
-  const isSignal = (x: number, z: number) => SIGNALS.some((s) => s.x === x && s.z === z);
+  /** Біля перехресть із зебрами осьова лінія закінчується раніше. */
+  const isSignal = (x: number, z: number) => world.wideNodes.some((s) => s.x === x && s.z === z);
   const dash = (cx: number, cz: number, len: number, alongX: boolean, w = 0.14) =>
     box(cx, MARK_Y, cz, alongX ? len : w, 0.01, alongX ? w : len, mats.marking);
   /** Осьова між перехрестями: суцільна біля перехресть, далі пунктир. */
@@ -535,24 +542,28 @@ export function buildCity(scene: Scene, shadows: boolean): CityView {
     }
 
   // Зебри: смуги вздовж руху, розкладені поперек дороги.
-  for (const c of CROSSWALKS) {
+  for (const c of world.crosswalks) {
     for (let k = -HW + 0.5; k <= HW - 0.4; k += 1.0) {
       if (c.roadAlongX) box(c.x, MARK_Y, c.z + k, c.width, 0.01, 0.5, mats.marking);
       else box(c.x + k, MARK_Y, c.z, 0.5, 0.01, c.width, mats.marking);
     }
   }
   // Стоп-лінії на регульованих перехрестях (права половина дороги перед зеброю).
-  for (const s of SIGNALS) {
+  for (const s of world.signals) {
     const d = HW + 2.2 + 1.5 + 0.45;
     box(s.x + HW / 2, MARK_Y, s.z - d, HW, 0.01, 0.4, mats.marking);
     box(s.x - HW / 2, MARK_Y, s.z + d, HW, 0.01, 0.4, mats.marking);
     box(s.x + d, MARK_Y, s.z + HW / 2, 0.4, 0.01, HW, mats.marking);
     box(s.x - d, MARK_Y, s.z - HW / 2, 0.4, 0.01, HW, mats.marking);
   }
-  // Лінія «Дати дорогу» — трикутники вершиною до водія.
-  for (const g of GIVE_WAY_LINES) {
+  // Лінія «Дати дорогу» — трикутники вершиною до водія; перед знаком «STOP» — суцільна стоп-лінія.
+  for (const g of world.lines) {
     const f = forwardOf(g.heading);
     const r = rightOf(g.heading);
+    if (g.kind === 'stop') {
+      box(g.x - f.x * 0.2, MARK_Y, g.z - f.z * 0.2, Math.abs(r.x) * HW + Math.abs(f.x) * 0.4, 0.01, Math.abs(r.z) * HW + Math.abs(f.z) * 0.4, mats.marking);
+      continue;
+    }
     for (let k = -1.5; k <= 1.5; k += 0.75) {
       const tri = MeshBuilder.CreateDisc('tooth', { radius: 0.36, tessellation: 3 }, scene);
       tri.rotation.set(Math.PI / 2, g.heading + Math.PI / 2, 0);
@@ -568,10 +579,10 @@ export function buildCity(scene: Scene, shadows: boolean): CityView {
 
   // ---------- Дерева вздовж тротуарів ----------
   const avoid: Array<{ x: number; z: number; r: number }> = [
-    ...CROSSWALKS.map((c) => ({ x: c.x, z: c.z, r: 9 })),
-    ...SIGNS.map((s) => ({ x: s.x, z: s.z, r: 3 })),
+    ...world.crosswalks.map((c) => ({ x: c.x, z: c.z, r: 9 })),
+    ...world.signs.map((s) => ({ x: s.x, z: s.z, r: 3 })),
     ...DRIVEWAYS.map((d) => ({ x: d.x, z: d.z, r: 6 })),
-    { x: 50, z: 85, r: 4 },
+    ...world.avoid,
   ];
   const free = (x: number, z: number) => avoid.every((a) => Math.hypot(a.x - x, a.z - z) > a.r);
   for (let i = 0; i < RX.length - 1; i++)
@@ -612,7 +623,8 @@ export function buildCity(scene: Scene, shadows: boolean): CityView {
   }
 
   // ---------- Латки асфальту й люки ----------
-  const nearSpecial = (x: number, z: number) => CROSSWALKS.some((c) => Math.hypot(c.x - x, c.z - z) < 7);
+  const nearSpecial = (x: number, z: number) =>
+    world.crosswalks.some((c) => Math.hypot(c.x - x, c.z - z) < 7) || world.props.some((p) => Math.hypot(p.x - x, p.z - z) < 6);
   for (const x of RX)
     for (let j = 0; j < RZ.length - 1; j++)
       for (let k = 0; k < 3; k++) {
@@ -639,35 +651,120 @@ export function buildCity(scene: Scene, shadows: boolean): CityView {
   }
 
   // ---------- Дорожні знаки ----------
-  for (const s of SIGNS) {
+  for (const s of world.signs) {
     const pole = MeshBuilder.CreateCylinder('pole', { diameter: 0.09, height: 2.5, tessellation: 6 }, scene);
     pole.position.set(s.x, CURB + 1.25, s.z);
     b.add(pole, mats.pole);
     const f = forwardOf(s.facing);
+    const r = rightOf(s.facing);
     const y0 = CURB + 2.35;
-    const plate = (mesh: Mesh, mat: StandardMaterial, off: number, rotZ: number) => {
+    /** dx, dy — зсув деталі на табличці (праворуч і вгору, як бачить водій). */
+    const plate = (mesh: Mesh, mat: StandardMaterial, off: number, rotZ: number, dx = 0, dy = 0) => {
       mesh.rotation.set(0, s.facing, rotZ);
-      mesh.position.set(s.x - f.x * (0.06 + off), y0, s.z - f.z * (0.06 + off));
+      mesh.position.set(s.x - f.x * (0.06 + off) + r.x * dx, y0 + dy, s.z - f.z * (0.06 + off) + r.z * dx);
       b.add(mesh, mat);
     };
-    const disc = (r: number, tess: number) => MeshBuilder.CreateDisc('sign', { radius: r, tessellation: tess, sideOrientation: Mesh.DOUBLESIDE }, scene);
-    if (s.kind === 'giveWay') {
-      plate(disc(0.62, 3), mats.signRed, 0, -Math.PI / 2);
-      plate(disc(0.42, 3), mats.signWhite, 0.01, -Math.PI / 2);
-    } else if (s.kind === 'mainRoad') {
-      plate(disc(0.5, 4), mats.signWhite, 0, 0);
-      plate(disc(0.38, 4), mats.signYellow, 0.01, 0);
-    } else {
-      const sq = MeshBuilder.CreatePlane('sign', { size: 0.85, sideOrientation: Mesh.DOUBLESIDE }, scene);
-      plate(sq, mats.signBlue, 0, 0);
-      plate(disc(0.36, 3), mats.signWhite, 0.01, Math.PI / 2);
+    const disc = (rad: number, tess: number) => MeshBuilder.CreateDisc('sign', { radius: rad, tessellation: tess, sideOrientation: Mesh.DOUBLESIDE }, scene);
+    const rect = (w: number, h: number) => MeshBuilder.CreatePlane('sign', { width: w, height: h, sideOrientation: Mesh.DOUBLESIDE }, scene);
+    /** Стрілка: стрижень і трикутний наконечник; up — вістрям угору. */
+    const arrow = (mat: StandardMaterial, off: number, dx: number, up: boolean) => {
+      const k = up ? 1 : -1;
+      plate(rect(0.07, 0.34), mat, off, 0, dx, -0.06 * k);
+      plate(disc(0.1, 3), mat, off, (k * Math.PI) / 2, dx, 0.15 * k);
+    };
+    switch (s.kind) {
+      case 'giveWay':
+        plate(disc(0.62, 3), mats.signRed, 0, -Math.PI / 2);
+        plate(disc(0.42, 3), mats.signWhite, 0.01, -Math.PI / 2);
+        break;
+      case 'stop':
+        plate(disc(0.5, 8), mats.signWhite, 0, Math.PI / 8);
+        plate(disc(0.45, 8), mats.signRed, 0.01, Math.PI / 8);
+        plate(rect(0.5, 0.12), mats.signWhite, 0.02, 0);
+        break;
+      case 'mainRoad':
+        plate(disc(0.5, 4), mats.signWhite, 0, 0);
+        plate(disc(0.38, 4), mats.signYellow, 0.01, 0);
+        break;
+      case 'yieldOncoming':
+        plate(disc(0.45, 16), mats.signRed, 0, 0);
+        plate(disc(0.37, 16), mats.signWhite, 0.01, 0);
+        arrow(mats.signBlack, 0.02, -0.1, true);
+        arrow(mats.signRed, 0.02, 0.1, false);
+        break;
+      case 'priorityOncoming':
+        plate(rect(0.75, 0.75), mats.signBlue, 0, 0);
+        arrow(mats.signWhite, 0.01, -0.12, true);
+        arrow(mats.signRed, 0.01, 0.12, false);
+        break;
+      case 'roadworks':
+        plate(disc(0.62, 3), mats.signRed, 0, Math.PI / 2);
+        plate(disc(0.45, 3), mats.signWhite, 0.01, Math.PI / 2);
+        plate(rect(0.08, 0.22), mats.signBlack, 0.02, 0.5, 0, -0.02);
+        plate(rect(0.3, 0.05), mats.signBlack, 0.02, 0, 0, -0.16);
+        break;
+      case 'busStop':
+        plate(rect(0.7, 0.7), mats.signBlue, 0, 0);
+        plate(rect(0.48, 0.24), mats.signWhite, 0.01, 0, 0, 0.04);
+        plate(rect(0.4, 0.06), mats.signBlue, 0.02, 0, 0, 0.08);
+        break;
+      case 'crosswalk':
+        plate(rect(0.85, 0.85), mats.signBlue, 0, 0);
+        plate(disc(0.36, 3), mats.signWhite, 0.01, Math.PI / 2);
+        break;
+    }
+  }
+
+  // ---------- Антураж ситуацій ----------
+  const onRoad = (x: number, z: number) => RX.some((v) => Math.abs(v - x) <= HW) || RZ.some((v) => Math.abs(v - z) <= HW);
+  for (const p of world.props) {
+    const y = onRoad(p.x, p.z) ? 0 : CURB;
+    const f = forwardOf(p.heading);
+    const r = rightOf(p.heading);
+    /** Бокс у локальних координатах предмета: a — уздовж heading, c — убік. */
+    const part = (a: number, c: number, yy: number, len: number, h: number, w: number, mat: StandardMaterial) =>
+      box(p.x + f.x * a + r.x * c, y + yy, p.z + f.z * a + r.z * c, w, h, len, mat, p.heading);
+    switch (p.kind) {
+      case 'barrier':
+        // Червоно-біла балка на двох ніжках.
+        for (let k = 0; k < 6; k++) part(-1.25 + 0.21 + k * 0.42, 0, 0.85, 0.42, 0.24, 0.1, k % 2 ? mats.signWhite : mats.signRed);
+        for (const a of [-1.1, 1.1]) part(a, 0, 0.36, 0.08, 0.72, 0.5, mats.pole);
+        break;
+      case 'cone': {
+        const cone = MeshBuilder.CreateCylinder('cone', { diameterTop: 0.06, diameterBottom: 0.38, height: 0.72, tessellation: 8 }, scene);
+        cone.position.set(p.x, y + 0.36, p.z);
+        b.add(cone, mats.coneOrange);
+        part(0, 0, 0.42, 0.25, 0.08, 0.25, mats.signWhite);
+        part(0, 0, 0.02, 0.45, 0.04, 0.45, mats.coneOrange);
+        break;
+      }
+      case 'triangle': {
+        const tri = MeshBuilder.CreateDisc('warn', { radius: 0.3, tessellation: 3, sideOrientation: Mesh.DOUBLESIDE }, scene);
+        tri.rotation.set(0, p.heading + Math.PI, Math.PI / 2);
+        tri.position.set(p.x, y + 0.24, p.z);
+        b.add(tri, mats.signRed);
+        part(0, 0, 0.02, 0.3, 0.03, 0.06, mats.pole);
+        break;
+      }
+      case 'shelter':
+        // Павільйон зупинки: дах, задня скляна стінка, стійки й лавка.
+        part(0, 0, 2.45, 3.6, 0.1, 1.6, mats.roofDark);
+        part(0, -0.7, 1.3, 3.4, 2.1, 0.06, mats.window);
+        for (const a of [-1.7, 1.7]) part(a, -0.7, 1.2, 0.1, 2.4, 0.1, mats.pole);
+        part(0, -0.35, 0.45, 2.4, 0.08, 0.4, mats.trunk);
+        break;
+      case 'kiosk':
+        part(0, 0, 1.25, 2.4, 2.5, 2.0, mats.walls[2]);
+        part(0, 0, 2.6, 2.7, 0.2, 2.3, mats.awnings[1]);
+        part(0, -1.01, 1.4, 1.6, 0.9, 0.02, mats.shop);
+        break;
     }
   }
 
   // ---------- Світлофори ----------
   const lampMats = new Map<string, StandardMaterial>();
   const lb = new Batcher();
-  for (const sig of SIGNALS) {
+  for (const sig of world.signals) {
     for (const [heading, axis] of [
       [0, 'ns'],
       [Math.PI, 'ns'],
@@ -700,7 +797,7 @@ export function buildCity(scene: Scene, shadows: boolean): CityView {
   }
   lb.flush(new Set(), false);
   const trafficLights = new TrafficLightView(lampMats);
-  trafficLights.update(Object.fromEntries(SIGNALS.map((s) => [s.id, s.initial])));
+  trafficLights.update(Object.fromEntries(world.signals.map((s) => [s.id, s.initial])));
 
   for (const [mat, g] of geos) if (!g.empty) b.add(g.toMesh('detail', scene), mat);
 
@@ -708,5 +805,13 @@ export function buildCity(scene: Scene, shadows: boolean): CityView {
     ? new Set([mats.grass, mats.grassDark, mats.asphalt, mats.parking, mats.sidewalk, mats.paving, mats.marking])
     : new Set<StandardMaterial>();
   b.flush(receivers);
-  return { trafficLights };
+  const meshes = scene.meshes.filter((m) => !meshesBefore.has(m));
+  const materials = scene.materials.filter((m) => !materialsBefore.has(m));
+  return {
+    trafficLights,
+    dispose() {
+      for (const m of meshes) m.dispose(false, false);
+      for (const m of materials) m.dispose();
+    },
+  };
 }

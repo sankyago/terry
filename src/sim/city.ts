@@ -1,7 +1,8 @@
 import { CITY } from '../config';
 import type { Vec2 } from './math';
 
-export type LightColor = 'red' | 'redYellow' | 'yellow' | 'green';
+/** flash — миготливий жовтий (світлофор працює як нерегульоване перехрестя). */
+export type LightColor = 'red' | 'redYellow' | 'yellow' | 'green' | 'flash';
 /** ns — сигнал для руху вздовж осі Z (північ–південь), ew — уздовж осі X. */
 export interface LightState {
   ns: LightColor;
@@ -15,14 +16,21 @@ export interface SignalizedIntersection {
   initial: LightState;
 }
 
-/** Перехрестя зі світлофорами. Усі інші — нерегульовані. */
-export const SIGNALS: SignalizedIntersection[] = [
-  { id: 'A', x: 180, z: 180, initial: { ns: 'green', ew: 'red' } },
-  { id: 'B', x: 90, z: 180, initial: { ns: 'green', ew: 'red' } },
-  { id: 'C', x: 0, z: 180, initial: { ns: 'red', ew: 'green' } },
-];
-
-export type SignKind = 'giveWay' | 'mainRoad' | 'crosswalk';
+/**
+ * giveWay — 2.1 «Дати дорогу», stop — 2.2 «Проїзд без зупинки заборонено», mainRoad — 2.3 «Головна дорога»,
+ * crosswalk — 5.35 «Пішохідний перехід», yieldOncoming — 2.6 «Перевага зустрічного руху»,
+ * priorityOncoming — 2.7 «Перевага перед зустрічним рухом», roadworks — 1.37 «Дорожні роботи»,
+ * busStop — 5.41 «Пункт зупинки автобуса».
+ */
+export type SignKind =
+  | 'giveWay'
+  | 'stop'
+  | 'mainRoad'
+  | 'crosswalk'
+  | 'yieldOncoming'
+  | 'priorityOncoming'
+  | 'roadworks'
+  | 'busStop';
 
 /** Дорожній знак: стоїть у точці (x, z) і дивиться назустріч транспорту, що рухається з heading. */
 export interface Sign {
@@ -33,50 +41,44 @@ export interface Sign {
   facing: number;
 }
 
-const E = Math.PI / 2;
-const N = 0;
-const S = Math.PI;
-const W = -Math.PI / 2;
-const edge = CITY.roadHalfWidth + 0.9;
-
-export const SIGNS: Sign[] = [
-  // Перехрестя (180, 90): Z=90 — другорядна, X=180 — головна.
-  { kind: 'giveWay', x: 180 - edge - 3, z: 90 - edge, facing: E },
-  { kind: 'giveWay', x: 180 + edge + 3, z: 90 + edge, facing: W },
-  { kind: 'mainRoad', x: 180 + edge, z: 90 - edge - 3, facing: N },
-  { kind: 'mainRoad', x: 180 - edge, z: 90 + edge + 3, facing: S },
-  // Нерегульований пішохідний перехід на Z=90, x=62.
-  { kind: 'crosswalk', x: 62 - 3, z: 90 - edge, facing: E },
-  { kind: 'crosswalk', x: 62 + 3, z: 90 + edge, facing: W },
-];
-
-/** Зебра: center — центр, alongX — смуги переходу перпендикулярні осі X (дорога йде вздовж X). */
+/** Зебра: center — центр, roadAlongX — дорога під зеброю йде вздовж осі X. */
 export interface Crosswalk {
   x: number;
   z: number;
-  /** true — дорога вздовж осі X (перехід перетинає її з півдня на північ). */
   roadAlongX: boolean;
   width: number;
 }
 
-const crosswalks: Crosswalk[] = [{ x: 62, z: 90, roadAlongX: true, width: 4 }];
-// На регульованих перехрестях — зебри на всіх чотирьох підходах.
-for (const s of SIGNALS) {
-  const d = CITY.roadHalfWidth + 2.2;
-  crosswalks.push(
-    { x: s.x - d, z: s.z, roadAlongX: true, width: 3 },
-    { x: s.x + d, z: s.z, roadAlongX: true, width: 3 },
-    { x: s.x, z: s.z - d, roadAlongX: false, width: 3 },
-    { x: s.x, z: s.z + d, roadAlongX: false, width: 3 },
-  );
+/** Поперечна лінія перед перехрестям: зубці «Дати дорогу» або суцільна стоп-лінія. */
+export interface RoadLine {
+  kind: 'giveWay' | 'stop';
+  x: number;
+  z: number;
+  heading: number;
 }
-export const CROSSWALKS = crosswalks;
 
-/** Лінія «Дати дорогу» (зубці) перед головною дорогою. */
-export const GIVE_WAY_LINES: Array<{ x: number; z: number; heading: number }> = [
-  { x: 180 - CITY.roadHalfWidth - 0.6, z: 90 - CITY.laneOffset, heading: E },
-  { x: 180 + CITY.roadHalfWidth + 0.6, z: 90 + CITY.laneOffset, heading: W },
-];
+/** Статичний антураж ситуації: огородження робіт, конус, знак аварійної зупинки, павільйон зупинки. */
+export interface Prop {
+  kind: 'barrier' | 'cone' | 'triangle' | 'shelter' | 'kiosk';
+  x: number;
+  z: number;
+  heading: number;
+}
+
+/** Усе, що місто має показати для конкретного маршруту: світлофори, знаки, розмітка, антураж. */
+export interface WorldFeatures {
+  signals: SignalizedIntersection[];
+  signs: Sign[];
+  crosswalks: Crosswalk[];
+  lines: RoadLine[];
+  props: Prop[];
+  /** Місця ситуацій: тут не ставимо високих будинків, щоб камера бачила учасників. */
+  open: Array<{ x: number; z: number; r: number }>;
+  /** Місця, де не можна садити дерева й ставити ліхтарі (стежки пішоходів ситуацій). */
+  avoid: Array<{ x: number; z: number; r: number }>;
+  /** Перехрестя з переходами на всіх рукавах — осьова лінія перед ними коротша. */
+  wideNodes: Vec2[];
+}
 
 /** Виїзд із двору: розрив у тротуарі й бордюрі. */
 export const DRIVEWAYS: Array<{ x: number; z: number; width: number; alongZ: boolean }> = [
@@ -85,23 +87,3 @@ export const DRIVEWAYS: Array<{ x: number; z: number; width: number; alongZ: boo
 
 /** Двір зі стоянкою, з якого стартує учень. */
 export const YARD = { minX: 8, maxX: 62, minZ: 28, maxZ: 83.5 };
-
-export const isRoadX = (x: number) => CITY.roadsX.some((r) => Math.abs(r - x) <= CITY.roadHalfWidth);
-export const isRoadZ = (z: number) => CITY.roadsZ.some((r) => Math.abs(r - z) <= CITY.roadHalfWidth);
-
-/** Точка в правій смузі дороги для заданого напрямку руху. */
-export function lane(heading: 'N' | 'S' | 'E' | 'W', along: number, road: number): Vec2 {
-  const o = CITY.laneOffset;
-  switch (heading) {
-    case 'N':
-      return { x: road + o, z: along };
-    case 'S':
-      return { x: road - o, z: along };
-    case 'E':
-      return { x: along, z: road - o };
-    case 'W':
-      return { x: along, z: road + o };
-  }
-}
-
-export const MAP_BOUNDS = { minX: -90, maxX: 270, minZ: -90, maxZ: 270 };

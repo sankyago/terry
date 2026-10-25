@@ -17,7 +17,7 @@ export class PedestrianView {
   private legs: TransformNode[] = [];
   private arms: TransformNode[] = [];
 
-  constructor(scene: Scene, cache: MaterialCache, shirt: string, pants = '#3a4250') {
+  constructor(scene: Scene, cache: MaterialCache, shirt: string, pants = '#3a4250', cane = false) {
     const id = counter++;
     this.root = new TransformNode(`ped${id}`, scene);
     this.tilt = new TransformNode(`pedTilt${id}`, scene);
@@ -55,6 +55,20 @@ export class PedestrianView {
     const headM = MeshBuilder.CreateSphere('head', { diameter: 0.26, segments: 6 }, scene);
     headM.position.y = 1.66;
     add(headM, skin, this.tilt);
+    if (cane) {
+      // Біла тростина в правій руці, нахилена вперед до землі.
+      const stick = MeshBuilder.CreateBox('cane', { width: 0.04, height: 1.15, depth: 0.04 }, scene);
+      stick.position.set(0.02, -0.75, 0.25);
+      stick.rotation.x = 0.45;
+      add(stick, cache.get('#f7f7f2', 0.5), this.arms[1]);
+    }
+  }
+
+  private alpha = 1;
+  setAlpha(a: number) {
+    if (a === this.alpha) return;
+    this.alpha = a;
+    for (const m of this.meshes) m.visibility = a;
   }
 
   setVisible(v: boolean) {

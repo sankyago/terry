@@ -1,6 +1,8 @@
 import { CAR } from '../config';
 
 export type ActorKind = 'car' | 'ambulance' | 'bus' | 'pedestrian';
+/** Моделі легковиків у потоці (купе — лише авто учня). */
+export type TrafficModel = 'sedan' | 'hatch' | 'wagon' | 'suv' | 'van';
 
 export interface KindSpec {
   length: number;

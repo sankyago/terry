@@ -23,8 +23,10 @@ import type { ActorKind } from '../sim/kinds';
 import { KINDS } from '../sim/kinds';
 import type { Pose } from '../sim/math';
 import { lerp, lerpAngle, msToKmh } from '../sim/math';
-import type { ActorState } from '../sim/sim';
+import { curvatureAt } from '../sim/path';
+import type { ActorState, IndicatorState } from '../sim/sim';
 import { Sim } from '../sim/sim';
+import type { RunPlan } from '../tickets/plan';
 import type { AnswerRecord, CameraMode, Mode, RunResult } from '../storage/storage';
 import { buildResult } from '../storage/storage';
 
@@ -51,6 +53,8 @@ export type GameEvent =
   | { type: 'camera'; mode: CameraMode };
 
 export interface GameOptions {
+  /** Маршрут, який видно в меню й з якого почнеться перший заїзд. */
+  plan: RunPlan;
   quality: QualityProfile;
   mode: Mode;
   camera: CameraMode;
@@ -60,10 +64,13 @@ export interface GameOptions {
 const HUD_INTERVAL = 0.1;
 /** Пішоходи ситуацій трохи більші за реальних — інакше з висоти їх погано видно. */
 const PED_SCALE = 1.25;
+/** На скільки метрів на початку й наприкінці траєкторії учасник з'являється і зникає. */
+const FADE = 8;
 type ActorView = VehicleView | PedestrianView;
 
 export class Game {
-  readonly sim = new Sim();
+  sim: Sim;
+  plan: RunPlan;
   status: GameStatus = 'menu';
   mode: Mode;
 
@@ -97,6 +104,8 @@ export class Game {
   private disposed = false;
 
   constructor(canvas: HTMLCanvasElement, opts: GameOptions) {
+    this.plan = opts.plan;
+    this.sim = new Sim(opts.plan);
     this.mode = opts.mode;
     this.cameraMode = opts.camera;
     this.audio.setMuted(!opts.sound);
@@ -132,11 +141,11 @@ export class Game {
     sun.intensity = 0.6;
 
     this.cache = new MaterialCache(scene);
-    this.city = buildCity(scene, false);
+    this.city = buildCity(scene, false, this.plan.world);
     this.ego = new VehicleView(scene, this.cache, 'coupe', COLORS.carBody, true);
     this.guides = new Guides(scene);
     this.effects = new Effects(scene);
-    this.ambient = new Ambient(scene, this.cache);
+    this.ambient = new Ambient(scene, this.cache, this.plan.world, this.plan.route, this.plan.seed);
     this.prevEgo = this.egoPose();
 
     this.rig = new CameraRig(scene, { x: 70, z: 110 });
@@ -207,6 +216,22 @@ export class Game {
     return this.sim.tickets.length;
   }
 
+  /** Білети поточного заїзду в порядку маршруту. */
+  get tickets() {
+    return this.sim.tickets;
+  }
+
+  /** Новий маршрут: нова симуляція й місто з його знаками, світлофорами й розміткою. */
+  private setPlan(plan: RunPlan) {
+    if (plan === this.plan) return;
+    this.plan = plan;
+    this.sim = new Sim(plan);
+    this.city.dispose();
+    this.city = buildCity(this.scene, false, plan.world);
+    this.ambient.dispose();
+    this.ambient = new Ambient(this.scene, this.cache, plan.world, plan.route, plan.seed);
+  }
+
   // ---------- Керування спробою ----------
 
   private resetRun() {
@@ -224,10 +249,12 @@ export class Game {
     this.rig.snap();
   }
 
-  start(mode: Mode) {
+  /** plan — новий маршрут (без нього заїзд повторює поточний). */
+  start(mode: Mode, plan?: RunPlan) {
     this.mode = mode;
     this.audio.unlock();
     this.audio.resume();
+    if (plan) this.setPlan(plan);
     this.resetRun();
     this.rig.setMode(this.cameraMode);
     this.setStatus('playing');
@@ -377,7 +404,7 @@ export class Game {
           this.emit({ type: 'cleared', ticket: ev.ticket });
           break;
         case 'finished': {
-          const result = buildResult(this.mode, this.answers, this.sim.tickets.length, this.sim.state.time);
+          const result = buildResult(this.mode, this.answers, this.sim.tickets.length, this.sim.state.time, this.plan.ids);
           this.audio.setActive(false);
           if (result.passed) this.audio.success();
           else this.audio.fail();
@@ -394,9 +421,9 @@ export class Game {
     if (!t) return;
     const st = this.sim.state;
     const actors = st.actors
-      .filter((a) => a.ticket === st.ticket && a.alive)
+      .filter((a) => a.ticket === st.ticket && a.alive && !a.parked)
       .map((a) => ({ x: a.x, z: a.z, heading: a.heading, size: a.kind === 'pedestrian' ? 2.6 : KINDS[a.kind].length + 1.4 }));
-    const toS = Math.max(...t.actors.map((a) => a.egoConflictS)) + 6;
+    const toS = Math.max(...t.actors.filter((a) => !a.spec.parked).map((a) => a.egoConflictS)) + 6;
     this.guides.show(this.sim.egoPath, st.ego.s, toS, actors);
   }
 
@@ -454,7 +481,7 @@ export class Game {
       }
     for (const a of st.actors) this.renderActor(a, alpha);
 
-    this.city.trafficLights.update(st.lights);
+    this.city.trafficLights.update(st.lights, this.clock);
     this.guides.update(this.clock);
     // Під час ДТП авто крутиться — камера тримає напрямок, який був до удару.
     if (!st.crash) this.cameraHeading = egoPose.heading;
@@ -463,7 +490,12 @@ export class Game {
     this.rig.aspect = w / Math.max(1, h);
     const card = this.status === 'decision' || this.status === 'crashed';
     const wide = (this.scene.getEngine().getRenderingCanvas()?.clientWidth ?? 0) > 640;
-    this.rig.update(egoPose, dt, { focus: this.focus(), heading: this.cameraHeading, rightInset: card && wide ? 0.34 : 0 });
+    this.rig.update(egoPose, dt, {
+      focus: this.focus(),
+      heading: this.cameraHeading,
+      rightInset: card && wide ? 0.34 : 0,
+      bottomInset: card && !wide ? 0.5 : 0,
+    });
   }
 
   private renderActor(a: ActorState, alpha: number) {
@@ -472,27 +504,33 @@ export class Game {
       view?.setVisible(false);
       return;
     }
+    const path = this.sim.actorPath(a);
     if (!view) {
+      const specId = a.id.slice(a.id.indexOf(':') + 1);
+      const spec = this.sim.prepared[a.ticket]?.actors.find((p) => p.spec.id === specId)?.spec;
       view =
         a.kind === 'pedestrian'
-          ? new PedestrianView(this.scene, this.cache, a.color)
-          : new VehicleView(this.scene, this.cache, a.kind, a.color, true, pickCarModel(a.ticket, a.id.slice(a.id.indexOf(':') + 1)));
+          ? new PedestrianView(this.scene, this.cache, a.color, undefined, a.cane)
+          : new VehicleView(this.scene, this.cache, a.kind, a.color, true, spec?.model ?? pickCarModel(a.ticket, specId));
       this.views.set(a.id, view);
       this.spawnClock.set(a.id, this.clock);
     }
     view.setVisible(true);
     const pose = this.lerpPose(this.prevActors.get(a.id), { x: a.x, z: a.z, heading: a.heading }, alpha);
+    const appear = Math.min(1, (this.clock - (this.spawnClock.get(a.id) ?? 0)) / 0.4);
+    // Учасник проявляється на початку траєкторії й розчиняється наприкінці, а не з'являється раптово.
+    const edge = a.body || a.parked ? 1 : Math.min(1, a.s / FADE, (path.length - a.s) / FADE);
+    view.setAlpha(Math.max(0, Math.min(appear, edge)));
     if (view instanceof PedestrianView) {
-      const appear = Math.min(1, (this.clock - (this.spawnClock.get(a.id) ?? 0)) / 0.35);
       const fall = a.body ? Math.min(1, a.hitTime / 0.45) : 0;
-      view.update(pose, a.s, a.v > 0 && !a.body, fall, appear * PED_SCALE);
+      view.update(pose, a.s, a.v > 0 && !a.body, fall, (a.child ? 0.72 : 1) * PED_SCALE);
     } else {
       const r = a.kind === 'bus' ? 0.5 : 0.33;
       view.update(pose, {
         steerAngle: 0,
         wheelSpin: a.s / r,
-        braking: !!a.body,
-        indicator: a.body ? 'hazard' : 'none',
+        braking: !!a.body || (a.parked && !a.hazard),
+        indicator: a.body || a.hazard ? 'hazard' : a.parked ? 'none' : this.turnSignal(path, a.s),
         clock: this.clock,
         siren: a.siren,
         bounce: 0,
@@ -500,11 +538,22 @@ export class Game {
     }
   }
 
+  /** Покажчик повороту учасника: за 25 м до повороту на його траєкторії. */
+  private turnSignal(path: ReturnType<Sim['actorPath']>, s: number): IndicatorState {
+    for (let d = 0; d <= 25; d += 2.5) {
+      if (s + d > path.length) break;
+      const k = curvatureAt(path, s + d, 1.5);
+      if (Math.abs(k) > 0.08) return k > 0 ? 'right' : 'left';
+    }
+    return 'none';
+  }
+
   private focus(): CameraFocus | null {
     const st = this.sim.state;
     const t = this.sim.currentTicket;
     if (!t || st.phase === 'driving' || st.phase === 'finished') return null;
-    const p = st.crash ? { x: st.crash.x, z: st.crash.z } : t.actors[0].conflict;
+    const main = t.actors.find((a) => !a.spec.parked) ?? t.actors[0];
+    const p = st.crash ? { x: st.crash.x, z: st.crash.z } : main.conflict;
     return { point: p, weight: st.crash ? 0.6 : 0.45, dist: st.crash ? 40 : 48 };
   }
 
