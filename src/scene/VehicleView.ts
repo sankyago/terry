@@ -152,6 +152,14 @@ export class VehicleView {
     return this.meshes.filter((m) => m.name !== 'blob');
   }
 
+  private alpha = 1;
+  /** Плавна поява й зникнення на краях траєкторії. */
+  setAlpha(a: number) {
+    if (a === this.alpha || (a < 1 && Math.abs(a - this.alpha) < 0.02)) return;
+    this.alpha = a;
+    for (const m of this.meshes) m.visibility = a;
+  }
+
   setVisible(v: boolean) {
     this.root.setEnabled(v);
   }

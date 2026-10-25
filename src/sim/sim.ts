@@ -1,8 +1,7 @@
 import { CAR, CRASH_SETTLE_TIME, DRIVE } from '../config';
-import type { ActorSpec, Ticket } from '../tickets/tickets';
-import { EGO_ROUTE, FINISH_LINE, TICKETS } from '../tickets/tickets';
-import type { LightState } from './city';
-import { SIGNALS } from './city';
+import type { RunPlan } from '../tickets/plan';
+import type { ActorSpec, Ticket } from '../tickets/types';
+import type { LightState, SignalizedIntersection } from './city';
 import type { Contact, OBB } from './collision';
 import { collideObbCircle, collideObbObb, toLocal } from './collision';
 import type { ActorKind } from './kinds';
@@ -57,6 +56,11 @@ export interface ActorState {
   heading: number;
   alive: boolean;
   siren: boolean;
+  /** Стоїть на місці (перешкода), не має точки конфлікту. */
+  parked: boolean;
+  hazard: boolean;
+  child: boolean;
+  cane: boolean;
   body: Body | null;
   /** Час з моменту наїзду (для анімації падіння пішохода), -1 — без удару. */
   hitTime: number;
@@ -99,7 +103,7 @@ export type SimEvent =
 interface PreparedActor {
   spec: ActorSpec;
   path: Path;
-  /** s учня й учасника в точці конфлікту. */
+  /** s учня й учасника в точці конфлікту (для припаркованих — NaN). */
   egoConflictS: number;
   conflictS: number;
   conflict: Vec2;
@@ -115,6 +119,11 @@ export interface PreparedTicket {
 }
 
 const LIMIT_STEP = 0.5;
+/** Після точки конфлікту транспорт розганяється до цієї швидкості, щоб не заважати учню. */
+const EXIT_SPEED = 14;
+const EXIT_ACCEL = 2.5;
+/** Учасники минулих ситуацій, що лишилися позаду учня далі за цю відстань, зникають. */
+const FORGET_BEHIND = 40;
 const SPEC_COLORS: Record<ActorKind, string> = {
   car: '#3b6fd8',
   ambulance: '#f4f6f5',
@@ -132,13 +141,18 @@ export class Sim {
   readonly egoPath: Path;
   readonly prepared: PreparedTicket[];
   readonly finishS: number;
+  readonly tickets: Ticket[];
+  readonly signals: SignalizedIntersection[];
   state: SimState;
   private paths = new Map<string, Path>();
+  private clearAt = new Map<string, number>();
   private speedLimit: Float64Array;
 
-  constructor(readonly tickets: Ticket[] = TICKETS) {
-    this.egoPath = roundedPath(EGO_ROUTE);
-    this.finishS = nearestOnPath(this.egoPath, FINISH_LINE).s - CAR.length / 2;
+  constructor(readonly plan: RunPlan) {
+    this.tickets = plan.tickets;
+    this.signals = plan.world.signals;
+    this.egoPath = roundedPath(plan.route);
+    this.finishS = nearestOnPath(this.egoPath, plan.finish).s - CAR.length / 2;
 
     // Обмеження швидкості в поворотах, з урахуванням гальмування заздалегідь.
     const n = Math.ceil(this.egoPath.length / LIMIT_STEP) + 1;
@@ -150,14 +164,18 @@ export class Sim {
     for (let i = n - 2; i >= 0; i--) lim[i] = Math.min(lim[i], Math.sqrt(lim[i + 1] ** 2 + 2 * DRIVE.brake * LIMIT_STEP));
     this.speedLimit = lim;
 
-    this.prepared = tickets.map((ticket, ti) => {
+    this.prepared = this.tickets.map((ticket, ti) => {
       const stopS = nearestOnPath(this.egoPath, ticket.stopLine).s - CAR.length / 2;
-      const actors = ticket.actors.map((spec) => {
+      const actors = ticket.actors.map((spec): PreparedActor => {
         const path = roundedPath(spec.path, spec.kind === 'pedestrian' ? 0.25 : 0.5);
         this.paths.set(`${ti}:${spec.id}`, path);
+        if (spec.parked)
+          return { spec, path, egoConflictS: NaN, conflictS: NaN, conflict: path.pts[0], sAtDecision: 0, clearS: -Infinity };
         const c = findConflict(this.egoPath, stopS, path);
         if (!c) throw new Error(`Ситуація ${ticket.id}: учасник ${spec.id} не перетинає маршрут`);
         const k = KINDS[spec.kind];
+        const clearS = c.sb + k.length / 2 + (spec.kind === 'pedestrian' ? 2.5 : 3.2);
+        if (spec.kind !== 'pedestrian') this.clearAt.set(`${ti}:${spec.id}`, clearS);
         return {
           spec,
           path,
@@ -165,7 +183,7 @@ export class Sim {
           conflictS: c.sb,
           conflict: { x: c.x, z: c.z },
           sAtDecision: c.sb - spec.gap,
-          clearS: c.sb + k.length / 2 + (spec.kind === 'pedestrian' ? 2.5 : 3.2),
+          clearS,
         };
       });
       return { ticket, stopS, actors };
@@ -177,7 +195,7 @@ export class Sim {
 
   private initialState(): SimState {
     const lights: Record<string, LightState> = {};
-    for (const s of SIGNALS) lights[s.id] = { ...s.initial };
+    for (const s of this.signals) lights[s.id] = { ...s.initial };
     const p = poseOnPath(this.egoPath, 0);
     return {
       time: 0,
@@ -231,6 +249,7 @@ export class Sim {
     st.phase = 'wrongGo';
     // Учасник, з яким неминуче ДТП, приходить у точку конфлікту одночасно з учнем.
     for (const pa of t.actors) {
+      if (pa.spec.parked) continue;
       const te = Math.sqrt((2 * Math.max(0.5, pa.egoConflictS - st.ego.s)) / DRIVE.wrongGoAccel);
       const a = st.actors.find((x) => x.id === `${st.ticket}:${pa.spec.id}`);
       if (!a) continue;
@@ -277,19 +296,23 @@ export class Sim {
     const T = this.predictArrival(t.stopS, this.dt);
     st.decisionTimes[index] = st.time + T;
     for (const pa of t.actors) {
-      const s = pa.sAtDecision - pa.spec.speed * T;
+      const parked = pa.spec.parked ?? false;
       const a: ActorState = {
         id: `${index}:${pa.spec.id}`,
         ticket: index,
         kind: pa.spec.kind,
         color: pa.spec.color ?? SPEC_COLORS[pa.spec.kind],
-        s,
-        v: pa.spec.speed,
+        s: parked ? 0 : pa.sAtDecision - pa.spec.speed * T,
+        v: parked ? 0 : pa.spec.speed,
         x: 0,
         z: 0,
         heading: 0,
         alive: false,
         siren: pa.spec.siren ?? false,
+        parked,
+        hazard: pa.spec.hazard ?? false,
+        child: pa.spec.child ?? false,
+        cane: pa.spec.cane ?? false,
         body: null,
         hitTime: -1,
       };
@@ -315,7 +338,7 @@ export class Sim {
 
   private updateLights() {
     const st = this.state;
-    for (const s of SIGNALS) st.lights[s.id] = { ...s.initial };
+    for (const s of this.signals) st.lights[s.id] = { ...s.initial };
     this.tickets.forEach((t, i) => {
       const td = st.decisionTimes[i];
       if (!t.lights || Number.isNaN(td)) return;
@@ -373,10 +396,22 @@ export class Sim {
       if (a.body) {
         integrateBody(a.body, dt, a.kind === 'pedestrian' ? 6 : 5.5);
         a.hitTime += dt;
-      } else a.s += a.v * dt;
+      } else {
+        // Проїхавши точку конфлікту, транспорт розганяється й не заважає учню далі.
+        if (a.s > (this.clearAt.get(a.id) ?? Infinity) && a.v < EXIT_SPEED) a.v = Math.min(EXIT_SPEED, a.v + EXIT_ACCEL * dt);
+        a.s += a.v * dt;
+      }
       this.updateActorPose(a, this.actorPath(a));
     }
-    st.actors = st.actors.filter((a) => a.body || a.s <= this.actorPath(a).length + 1);
+    const e0 = st.ego;
+    const fwd = forwardOf(e0.heading);
+    st.actors = st.actors.filter((a) => {
+      if (a.body) return true;
+      if (a.s > this.actorPath(a).length + 1) return false;
+      // Учасники минулих ситуацій, що лишилися далеко позаду, більше не потрібні.
+      if (a.ticket < st.ticket && (a.x - e0.x) * fwd.x + (a.z - e0.z) * fwd.z < -FORGET_BEHIND) return false;
+      return true;
+    });
 
     const e = st.ego;
     const t = this.currentTicket;
@@ -404,6 +439,7 @@ export class Sim {
         const clear =
           !t ||
           t.actors.every((pa) => {
+            if (pa.spec.parked) return true;
             const a = st.actors.find((x) => x.id === `${st.ticket}:${pa.spec.id}`);
             return !a || a.s > pa.clearS;
           });
@@ -471,7 +507,8 @@ export class Sim {
     if (st.phase === 'finished') return;
     const e = st.ego;
     for (const a of st.actors) {
-      if (!a.alive) continue;
+      // Зіткнення рахуються лише з учасниками поточної ситуації: решта вже не перетинає маршрут.
+      if (!a.alive || a.ticket !== st.ticket) continue;
       const eo = this.egoObb();
       const ped = a.kind === 'pedestrian';
       const c: Contact | null = ped
@@ -485,7 +522,9 @@ export class Sim {
       const fa = forwardOf(a.heading);
       const va = a.body ? { x: a.body.vx, z: a.body.vz } : { x: fa.x * a.v, z: fa.z * a.v };
       const rel = (ve.x - va.x) * n.x + (ve.z - va.z) * n.z;
-      if (!st.crash) this.startCrash(a, events, Math.abs(rel));
+      // Пішохода збиває навіть дотичний удар — для нього сила удару — повна відносна швидкість.
+      const strength = ped ? Math.hypot(ve.x - va.x, ve.z - va.z) : Math.abs(rel);
+      if (!st.crash) this.startCrash(a, events, strength);
       if (!e.body) e.body = { x: e.x, z: e.z, heading: e.heading, vx: ve.x, vz: ve.z, omega: 0 };
       if (!a.body) {
         a.body = { x: a.x, z: a.z, heading: a.heading, vx: va.x, vz: va.z, omega: 0 };

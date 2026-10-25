@@ -818,9 +818,21 @@ p {
     justify-self: stretch;
     justify-content: space-between;
   }
+  /* 20 білетів не вміщаються кружечками — на вузькому екрані прогрес стає смужкою з сегментів. */
+  .dots {
+    flex: 1;
+    gap: 3px;
+  }
   .dots li {
-    width: 24px;
-    height: 24px;
+    flex: 1 1 0;
+    min-width: 0;
+    width: auto;
+    height: 8px;
+    border-radius: 4px;
+    font-size: 0;
+  }
+  .dots li.current {
+    transform: scaleY(1.5);
   }
   .sheet {
     align-items: flex-end;

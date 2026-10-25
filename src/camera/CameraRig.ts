@@ -24,6 +24,8 @@ export interface CameraFrame {
   heading: number;
   /** Частка ширини кадру, закрита панеллю праворуч: кадр зсувається вліво. */
   rightInset: number;
+  /** Частка висоти кадру, закрита шторкою знизу (вузький портрет): кадр зсувається вгору. */
+  bottomInset?: number;
 }
 
 /**
@@ -40,6 +42,7 @@ export class CameraRig {
   private snapNext = true;
   private shake = 0;
   private inset = 0;
+  private insetBottom = 0;
   /** Співвідношення сторін кадру (ширина / висота). */
   aspect = 16 / 9;
 
@@ -104,9 +107,12 @@ export class CameraRig {
     const back = this.dist * Math.cos(PITCH);
     // Зсув під бічну панель: дивимося правіше, і сцена з'їжджає вліво.
     this.inset += (frame.rightInset - this.inset) * (1 - Math.exp(-4 * dt));
+    this.insetBottom += ((frame.bottomInset ?? 0) - this.insetBottom) * (1 - Math.exp(-4 * dt));
     const halfW = this.dist * Math.tan(this.camera.fov / 2) * this.aspect;
-    const lx = this.look.x + rightOf(this.yaw).x * halfW * this.inset;
-    const lz = this.look.z + rightOf(this.yaw).z * halfW * this.inset;
+    // Під шторкою знизу — дивимося ближче до камери, і сцена з'їжджає вгору (на землі під 45° кадр видовжений у √2 раза).
+    const halfH = this.dist * Math.tan(this.camera.fov / 2) * Math.SQRT2;
+    const lx = this.look.x + rightOf(this.yaw).x * halfW * this.inset - cf.x * halfH * this.insetBottom;
+    const lz = this.look.z + rightOf(this.yaw).z * halfW * this.inset - cf.z * halfH * this.insetBottom;
     let sx = 0;
     let sy = 0;
     if (this.shake > 0.001) {

@@ -1,5 +1,6 @@
 import type { Mode, Progress, QualitySetting, Settings } from '../storage/storage';
 import { EXAM_MAX_MISTAKES } from '../storage/storage';
+import { RUN_SIZE } from '../tickets/plan';
 import { TICKETS } from '../tickets/tickets';
 import { SoundOffIcon, SoundOnIcon } from './icons';
 
@@ -44,11 +45,13 @@ export function StartScreen({ settings, progress, onChange, onStart }: Props) {
         </header>
 
         <section className="exercise">
-          <span className="eyebrow">Маршрут містом · {TICKETS.length} ситуацій</span>
+          <span className="eyebrow">
+            Маршрут містом · {RUN_SIZE} ситуацій із {TICKETS.length}
+          </span>
           <h2>Ви керуєте рішеннями, а не кермом</h2>
           <p className="muted small">
             Авто саме їде містом. Коли воно зупиняється, гра стає на паузу й показує білет: оберіть, як діяти. Помилка —
-            і ви побачите, чим вона закінчується на дорозі.
+            і ви побачите, чим вона закінчується на дорозі. Кожен заїзд — новий маршрут і інші білети.
           </p>
         </section>
 
@@ -83,7 +86,7 @@ export function StartScreen({ settings, progress, onChange, onStart }: Props) {
             <>
               {' '}
               · Найкраще: <b>
-                {p.bestScore}/{TICKETS.length}
+                {p.bestScore}/{RUN_SIZE}
               </b>
             </>
           )}

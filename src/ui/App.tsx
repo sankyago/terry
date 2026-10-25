@@ -4,7 +4,9 @@ import { Game } from '../game/Game';
 import type { ActorKind } from '../sim/kinds';
 import { resolveQuality } from '../scene/quality';
 import type { Mode, Progress, RunResult, Settings } from '../storage/storage';
-import { load, recordResult, save } from '../storage/storage';
+import { load, markSeen, recordResult, save } from '../storage/storage';
+import type { RunPlan } from '../tickets/plan';
+import { createRunPlan, planForIds } from '../tickets/plan';
 import { TICKETS } from '../tickets/tickets';
 import { Hud } from './Hud';
 import { PauseMenu } from './PauseMenu';
@@ -12,6 +14,20 @@ import { Results } from './Results';
 import { RotateHint } from './RotateHint';
 import { StartScreen } from './StartScreen';
 import { CrashCard, CrashFlash, Feedback, TicketCard } from './TicketCard';
+
+const params = new URLSearchParams(location.search);
+const DEBUG = params.has('debug');
+
+/**
+ * Маршрут нового заїзду: випадкові білети, спершу ще не бачені.
+ * У режимі налагодження ?tickets=id1,id2 задає білети й порядок, ?seed= — генератор.
+ */
+function nextPlan(seen: string[]): RunPlan {
+  const seed = DEBUG && params.has('seed') ? Number(params.get('seed')) : Math.floor(Math.random() * 1e9);
+  const ids = DEBUG ? params.get('tickets') : null;
+  if (ids) return planForIds(ids.split(','), seed);
+  return createRunPlan(seed, new Set(seen));
+}
 
 interface Decision {
   ticket: number;
@@ -43,6 +59,10 @@ export function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
+  const progressRef = useRef(progress);
+  progressRef.current = progress;
+  /** Перший заїзд їде маршрутом, який уже видно в меню. */
+  const freshPlan = useRef(true);
 
   const quality = useMemo(() => resolveQuality(settings.quality), [settings.quality]);
 
@@ -62,7 +82,7 @@ export function App() {
     let g: Game;
     try {
       const s = settingsRef.current;
-      g = new Game(canvas, { quality, mode: s.mode, camera: s.camera, sound: s.sound });
+      g = new Game(canvas, { plan: nextPlan(progressRef.current.seen), quality, mode: s.mode, camera: s.camera, sound: s.sound });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       return;
@@ -107,7 +127,8 @@ export function App() {
     setGame(g);
     setStatus('menu');
     // Для автоматичних перевірок у браузері: ?debug відкриває доступ до гри з консолі.
-    if (new URLSearchParams(location.search).has('debug')) (window as unknown as { __cruise?: Game }).__cruise = g;
+    if (DEBUG) (window as unknown as { __cruise?: Game }).__cruise = g;
+    freshPlan.current = true;
     return () => {
       off();
       g.dispose();
@@ -132,7 +153,11 @@ export function App() {
     setFlash(null);
     game?.setMuted(!settings.sound);
     game?.setCameraMode(settings.camera);
-    game?.start(mode);
+    if (!game) return;
+    const plan = freshPlan.current ? game.plan : nextPlan(progress.seen);
+    freshPlan.current = false;
+    game.start(mode, plan);
+    setProgress((p) => markSeen(p, plan.ids, TICKETS.length));
   };
 
   const toggleSound = () => {
@@ -175,20 +200,20 @@ export function App() {
           onSound={toggleSound}
         />
       )}
-      {game && status === 'playing' && feedback && <Feedback ticket={TICKETS[feedback.ticket]} kind={feedback.kind} mode={mode} />}
+      {game && status === 'playing' && feedback && <Feedback ticket={game.tickets[feedback.ticket]} kind={feedback.kind} mode={mode} />}
       {game && flash && (status === 'playing' || status === 'crashed') && <CrashFlash key={flash.id} kind={flash.kind} />}
       {game && status === 'decision' && decision && (
         <TicketCard
-          ticket={TICKETS[decision.ticket]}
+          ticket={game.tickets[decision.ticket]}
           index={decision.ticket}
-          total={TICKETS.length}
+          total={game.tickets.length}
           retry={decision.retry}
           onAnswer={(i) => game.answer(i)}
         />
       )}
       {game && status === 'crashed' && crash && (
         <CrashCard
-          ticket={TICKETS[crash.ticket]}
+          ticket={game.tickets[crash.ticket]}
           option={crash.option}
           kind={crash.kind}
           mode={mode}
@@ -210,7 +235,7 @@ export function App() {
       {game && status === 'finished' && result && (
         <Results
           result={result}
-          tickets={TICKETS}
+          tickets={game.tickets}
           progress={progress[result.mode]}
           onRetry={() => start(result.mode)}
           onSwitchMode={() => start(result.mode === 'training' ? 'exam' : 'training')}

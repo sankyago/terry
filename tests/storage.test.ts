@@ -1,28 +1,28 @@
 import { describe, expect, it } from 'vitest';
 import type { AnswerRecord } from '../src/storage/storage';
-import { DEFAULT_SETTINGS, buildResult, load, recordResult, save } from '../src/storage/storage';
+import { DEFAULT_SETTINGS, buildResult, load, markSeen, recordResult, save } from '../src/storage/storage';
 
 const mem = () => {
   const m = new Map<string, string>();
   return { getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => void m.set(k, v) };
 };
-const answers = (mistakes: number, total = 7): AnswerRecord[] =>
+const answers = (mistakes: number, total = 20): AnswerRecord[] =>
   Array.from({ length: total }, (_, i) => ({ ticket: i, option: 0, correct: i >= mistakes }));
 
 describe('результати й прогрес', () => {
-  it('іспит складено лише з не більше ніж однією помилкою', () => {
-    expect(buildResult('exam', answers(0), 7, 90).passed).toBe(true);
-    expect(buildResult('exam', answers(1), 7, 90).passed).toBe(true);
-    expect(buildResult('exam', answers(2), 7, 90).passed).toBe(false);
-    expect(buildResult('exam', answers(2), 7, 90).correct).toBe(5);
+  it('іспит складено лише з не більше ніж двома помилками', () => {
+    expect(buildResult('exam', answers(0), 20, 90).passed).toBe(true);
+    expect(buildResult('exam', answers(2), 20, 90).passed).toBe(true);
+    expect(buildResult('exam', answers(3), 20, 90).passed).toBe(false);
+    expect(buildResult('exam', answers(3), 20, 90).correct).toBe(17);
   });
 
   it('рахує спроби, складені іспити й найкращий результат за режимом', () => {
     let p = load(mem()).progress;
-    p = recordResult(p, buildResult('exam', answers(3), 7, 90));
-    p = recordResult(p, buildResult('exam', answers(0), 7, 90));
-    p = recordResult(p, buildResult('exam', answers(1), 7, 90));
-    expect(p.exam).toEqual({ attempts: 3, passes: 2, bestScore: 7 });
+    p = recordResult(p, buildResult('exam', answers(4), 20, 90));
+    p = recordResult(p, buildResult('exam', answers(0), 20, 90));
+    p = recordResult(p, buildResult('exam', answers(2), 20, 90));
+    expect(p.exam).toEqual({ attempts: 3, passes: 2, bestScore: 20 });
     expect(p.training.attempts).toBe(0);
   });
 
@@ -37,5 +37,13 @@ describe('результати й прогрес', () => {
     const d = load(s);
     save({ ...d, settings: { ...d.settings, sound: false, mode: 'exam', camera: 'north' } }, s);
     expect(load(s).settings).toMatchObject({ sound: false, mode: 'exam', camera: 'north' });
+  });
+
+  it('колода бачених білетів починається заново, коли бачено всі', () => {
+    let p = load(mem()).progress;
+    p = markSeen(p, ['a', 'b'], 3);
+    expect(p.seen).toEqual(['a', 'b']);
+    p = markSeen(p, ['b', 'c'], 3);
+    expect(p.seen).toEqual([]);
   });
 });

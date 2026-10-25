@@ -1,12 +1,13 @@
 import type { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial';
 import { CAR } from '../config';
+import type { TrafficModel } from '../sim/kinds';
 import { KINDS } from '../sim/kinds';
 import type { FlatGeometry, Section, Station } from './geometry';
 import { grow, mapSections, sectionAt, slice, topAt } from './geometry';
 
 /** Моделі легковиків: купе — авто учня (Audi A5), решта — для різноманіття на дорозі. */
-export type CarModel = 'coupe' | 'sedan' | 'hatch' | 'wagon' | 'suv' | 'van';
-export const TRAFFIC_MODELS: CarModel[] = ['sedan', 'hatch', 'wagon', 'suv', 'van'];
+export type CarModel = 'coupe' | TrafficModel;
+export const TRAFFIC_MODELS: TrafficModel[] = ['sedan', 'hatch', 'wagon', 'suv', 'van'];
 
 /** Стабільний вибір моделі: сусідні ситуації отримують різні машини, а повтор ситуації — ту саму. */
 export function pickCarModel(ticket: number, specId: string): CarModel {

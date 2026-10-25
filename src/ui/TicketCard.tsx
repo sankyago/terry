@@ -1,6 +1,6 @@
 import type { ActorKind } from '../sim/kinds';
 import type { Mode } from '../storage/storage';
-import type { Ticket } from '../tickets/tickets';
+import type { Ticket } from '../tickets/types';
 import { AlertIcon, CheckIcon, PlayIcon, RestartIcon } from './icons';
 
 const LETTERS = ['А', 'Б', 'В', 'Г'];

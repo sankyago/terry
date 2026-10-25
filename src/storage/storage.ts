@@ -18,6 +18,8 @@ export interface AnswerRecord {
 
 export interface RunResult {
   mode: Mode;
+  /** Білети заїзду в порядку маршруту (індекси в answers — позиції в цьому списку). */
+  ids: string[];
   answers: AnswerRecord[];
   correct: number;
   total: number;
@@ -35,10 +37,12 @@ export interface Progress {
   training: ModeProgress;
   exam: ModeProgress;
   lastResult: RunResult | null;
+  /** Білети, які вже траплялися в заїздах цього кола колоди: нові заїзди спершу беруть інші. */
+  seen: string[];
 }
 
-/** Авторський критерій іспиту: не більше однієї помилки. */
-export const EXAM_MAX_MISTAKES = 1;
+/** Критерій іспиту, як у сервісному центрі: 20 білетів, не більше двох помилок. */
+export const EXAM_MAX_MISTAKES = 2;
 
 const KEY = 'cruise.v2';
 
@@ -54,6 +58,7 @@ const emptyProgress = (): Progress => ({
   training: { attempts: 0, passes: 0, bestScore: null },
   exam: { attempts: 0, passes: 0, bestScore: null },
   lastResult: null,
+  seen: [],
 });
 
 interface Stored {
@@ -88,6 +93,7 @@ export function load(store: KeyValueStore | null = defaultStore()): Stored {
         training: { ...p.training, ...(data.progress?.training ?? {}) },
         exam: { ...p.exam, ...(data.progress?.exam ?? {}) },
         lastResult: data.progress?.lastResult ?? null,
+        seen: Array.isArray(data.progress?.seen) ? data.progress.seen.filter((x): x is string => typeof x === 'string') : [],
       },
     };
   } catch {
@@ -104,9 +110,15 @@ export function save(data: Stored, store: KeyValueStore | null = defaultStore())
   }
 }
 
-export function buildResult(mode: Mode, answers: AnswerRecord[], total: number, time: number): RunResult {
+export function buildResult(mode: Mode, answers: AnswerRecord[], total: number, time: number, ids: string[] = []): RunResult {
   const correct = answers.filter((a) => a.correct).length;
-  return { mode, answers, correct, total, passed: total - correct <= EXAM_MAX_MISTAKES, time };
+  return { mode, ids, answers, correct, total, passed: total - correct <= EXAM_MAX_MISTAKES, time };
+}
+
+/** Позначає білети заїзду як бачені; коли бачено всю колоду (poolSize), починається нове коло. */
+export function markSeen(progress: Progress, ids: string[], poolSize: number): Progress {
+  const seen = new Set([...progress.seen, ...ids]);
+  return { ...progress, seen: seen.size >= poolSize ? [] : [...seen] };
 }
 
 export function recordResult(progress: Progress, result: RunResult): Progress {
