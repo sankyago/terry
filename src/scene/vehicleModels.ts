@@ -294,35 +294,24 @@ export function buildCar(model: CarModel, geo: Geo, p: VehicleParts): WheelLayou
 
   // ---- Світло, решітка, номери ----
   const g = (m: StandardMaterial) => geo(m);
-  /** Плитка, що лежить на верхній поверхні кузова між za і zb (по сегменту на кожен злам поверхні). */
-  const onTop = (m: StandardMaterial, x: number, w: number, za: number, zb: number, th = 0.05) => {
-    const cuts = [za, ...body.map((st) => st.z).filter((z) => z > za && z < zb), zb];
-    for (let i = 0; i + 1 < cuts.length; i++) {
-      const [a, b] = [cuts[i], cuts[i + 1]];
-      const ya = topAt(body, a);
-      const yb = topAt(body, b);
-      const pitch = Math.atan2(yb - ya, b - a);
-      const len = Math.hypot(b - a, yb - ya) + 0.01;
-      for (const sx of x === 0 ? [0] : [-1, 1]) g(m).box(sx * x, (ya + yb) / 2 - th / 2 + 0.014, (a + b) / 2, w, th, len, 0, pitch);
-    }
-  };
   const ny = (t: number) => mix(s.nose.y0, s.nose.y1, t);
   const ty = (t: number) => mix(s.tail.y0, s.tail.y1, t);
-  const lampX = s.nose.hw - 0.24;
+  const lampX = s.nose.hw - 0.29;
   if (s.grille === 'audi') {
     // Великий шестикутний «single frame» з хромованою рамкою і світлодіодні фари.
     g(p.chrome).box(0, ny(0.48), hl - 0.02, 0.74, (s.nose.y1 - s.nose.y0) * 0.86, 0.05);
     g(p.trim).box(0, ny(0.48), hl - 0.01, 0.66, (s.nose.y1 - s.nose.y0) * 0.76, 0.05);
     for (const sx of [-1, 1]) g(p.trim).box(sx * (s.nose.hw - 0.22), ny(0.24), hl - 0.03, 0.2, 0.12, 0.06);
-    onTop(p.trim, lampX, 0.32, hl - 0.36, hl + 0.01, 0.05);
-    onTop(p.head, lampX + 0.02, 0.24, hl - 0.24, hl + 0.015, 0.055);
   } else {
     const gwid = s.grille === 'wide' ? 0.92 : 0.72;
     g(p.trim).box(0, ny(0.72), hl - 0.02, gwid, s.grille === 'wide' ? 0.2 : 0.13, 0.06);
     if (s.grille === 'wide') g(p.chrome).box(0, ny(0.72), hl + 0.005, gwid * 0.9, 0.03, 0.03);
     g(p.trim).box(0, ny(0.25), hl - 0.03, 0.96, 0.12, 0.06);
-    onTop(p.trim, lampX, 0.3, hl - 0.3, hl + 0.01, 0.05);
-    onTop(p.head, lampX, 0.24, hl - 0.24, hl + 0.015, 0.055);
+  }
+  // Фари — пласкі смуги в передній панелі, у темних корпусах.
+  for (const sx of [-1, 1]) {
+    g(p.trim).box(sx * lampX, ny(0.78), hl - 0.05, 0.36, 0.13, 0.1);
+    g(p.head).box(sx * lampX, ny(0.78), hl - 0.04, 0.32, s.grille === 'audi' ? 0.07 : 0.09, 0.1);
   }
   g(p.plate).box(0, ny(s.grille === 'audi' ? 0.22 : 0.45), hl + 0.01, 0.52, 0.11, 0.03);
   // Задні ліхтарі: горизонтальні («bar») або вертикальні по кутах корми.
@@ -344,7 +333,7 @@ export function buildCar(model: CarModel, geo: Geo, p: VehicleParts): WheelLayou
   // Покажчики повороту: передні кути, бокові повторювачі (видно згори), задні — поряд з ліхтарями.
   for (const sx of [-1, 1]) {
     const ind = sx < 0 ? p.indL : p.indR;
-    g(ind).box(sx * (s.nose.hw - 0.05), ny(0.82), hl - 0.04, 0.12, 0.07, 0.1);
+    g(ind).box(sx * (s.nose.hw - 0.06), ny(0.78), hl - 0.045, 0.1, 0.09, 0.1);
     g(ind).box(sx * (hw - 0.01), topAt(body, hl - 0.85) - 0.06, hl - 0.85, 0.05, 0.05, 0.2);
     g(ind).box(sx * (s.tail.hw - 0.1), ty(s.taillights === 'bar' ? 0.84 : 0.54), tailFaceZ - 0.005, 0.1, 0.09, 0.1);
   }
