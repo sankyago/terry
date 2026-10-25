@@ -3,7 +3,10 @@ export const SIM_DT = 1 / 60;
 /** Максимум кроків симуляції за один кадр (захист від «спіралі смерті»). */
 export const MAX_STEPS_PER_FRAME = 6;
 
-/** Габарити та параметри автомобіля (м). Візуальна модель будується з цих самих чисел. */
+/**
+ * Габарити авто учня (м) — Audi A5 Coupé 2012 (2.0 TFSI): 4,63 × 1,85 × 1,37, база 2,75.
+ * Візуальна модель і колайдер будуються з цих самих чисел.
+ */
 export const CAR = {
   length: 4.63,
   width: 1.85,
@@ -12,33 +15,32 @@ export const CAR = {
   groundClearance: 0.16,
   wheelRadius: 0.33,
   wheelWidth: 0.24,
-  /** Максимальний кут повороту передніх коліс (рад) → мінімальний радіус ≈ 5,5 м. */
-  maxSteerAngle: 0.465,
-  maxForwardSpeed: 60 / 3.6,
-  maxReverseSpeed: 12 / 3.6,
-  driveAccel: 2.8,
-  reverseAccel: 1.6,
-  brakeDecel: 7.5,
-  /** «Повзучість» автомата в D/R без педалей. */
-  creepSpeed: 4 / 3.6,
-  creepAccel: 0.8,
-  rollingResistance: 0.25,
-  aeroDrag: 0.012,
-  /** Нижче цієї швидкості (м/с) можна перемикати D↔R і вмикати P. */
-  shiftSpeedThreshold: 0.3,
-  /** Швидкість повороту керма (частка повного ходу за секунду). */
-  steerRate: 3.2,
+  mass: 1500,
 } as const;
 
-export const EXERCISE = {
-  speedLimitKmh: 20,
-  speedClearKmh: 18,
-  stopHoldSeconds: 2,
-  /** Швидкість, яку вважаємо «майже нулем» (км/год). */
-  stoppedSpeedKmh: 0.5,
-  startMoveDistance: 0.5,
-  offRoadTolerance: 0.05,
+/** Автопілот авто учня: людина керує лише рішеннями, не машиною. */
+export const DRIVE = {
+  /** Крейсерська швидкість у місті (м/с) ≈ 40 км/год. */
+  cruise: 11,
+  accel: 2.5,
+  brake: 3.2,
+  /** Допустиме бічне прискорення в поворотах (м/с²). */
+  lateralAccel: 2.2,
+  /** Прискорення, з яким авто «рушає» при неправильному рішенні. */
+  wrongGoAccel: 3.5,
+  /** Мінімальна пауза перед рушанням після правильної відповіді (с). */
+  yieldMinWait: 0.6,
 } as const;
 
-export const ROAD_HALF_WIDTH = 3.5;
-export const LANE_OFFSET = 1.75;
+/** Міська сітка: дві смуги по 3,5 м, тротуари по 3 м, квартали 90 м. */
+export const CITY = {
+  roadHalfWidth: 3.5,
+  laneOffset: 1.75,
+  sidewalk: 3,
+  curbHeight: 0.12,
+  roadsX: [-90, 0, 90, 180, 270],
+  roadsZ: [-90, 0, 90, 180, 270],
+} as const;
+
+/** Скільки триває анімація ДТП до появи пояснення (с). */
+export const CRASH_SETTLE_TIME = 2.8;

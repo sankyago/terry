@@ -4,54 +4,49 @@ import { Color3, Color4 } from '@babylonjs/core/Maths/math.color';
 import { Vector3 } from '@babylonjs/core/Maths/math.vector';
 import { HemisphericLight } from '@babylonjs/core/Lights/hemisphericLight';
 import { DirectionalLight } from '@babylonjs/core/Lights/directionalLight';
-import { ShadowGenerator } from '@babylonjs/core/Lights/Shadows/shadowGenerator';
-import '@babylonjs/core/Lights/Shadows/shadowGeneratorSceneComponent';
 
 import { AudioEngine } from '../audio/AudioEngine';
+import type { CameraFocus } from '../camera/CameraRig';
 import { CameraRig } from '../camera/CameraRig';
-import { CAR, EXERCISE, MAX_STEPS_PER_FRAME, SIM_DT } from '../config';
-import { Exercise } from '../exercise/exercise';
-import type { Hint } from '../exercise/hints';
-import { exerciseHint } from '../exercise/hints';
-import type { ExercisePhase, ExerciseResult, FaultRecord, Mode } from '../exercise/types';
-import { InputManager } from '../input/InputManager';
-import { CarView } from '../scene/CarView';
-import { buildWorld } from '../scene/buildWorld';
-import { COLORS } from '../scene/palette';
+import { MAX_STEPS_PER_FRAME, SIM_DT } from '../config';
+import { Ambient } from '../scene/Ambient';
+import { buildCity } from '../scene/buildCity';
+import type { CityView } from '../scene/buildCity';
+import { Effects } from '../scene/Effects';
+import { Guides } from '../scene/Guides';
+import { COLORS, MaterialCache } from '../scene/palette';
+import { PedestrianView } from '../scene/PedestrianView';
 import type { QualityProfile } from '../scene/quality';
-import type { IndicatorSide } from '../sim/indicators';
-import { Indicators } from '../sim/indicators';
+import { VehicleView } from '../scene/VehicleView';
+import type { ActorKind } from '../sim/kinds';
+import { KINDS } from '../sim/kinds';
 import type { Pose } from '../sim/math';
 import { lerp, lerpAngle, msToKmh } from '../sim/math';
-import type { Track } from '../sim/track';
-import { createTrack } from '../sim/track';
-import type { Gear, VehicleState } from '../sim/vehicle';
-import { GEARS, createVehicle, requestGear, resetVehicle, steerAngle, stepVehicle } from '../sim/vehicle';
-import type { CarTrackState } from '../sim/world';
-import { evaluateCarOnTrack, resolveCollisions } from '../sim/world';
-import type { CameraMode } from '../storage/storage';
+import type { ActorState } from '../sim/sim';
+import { Sim } from '../sim/sim';
+import type { AnswerRecord, CameraMode, Mode, RunResult } from '../storage/storage';
+import { buildResult } from '../storage/storage';
 
-export type GameStatus = 'menu' | 'playing' | 'paused' | 'finished';
+export type GameStatus = 'menu' | 'playing' | 'decision' | 'crashed' | 'paused' | 'finished';
+export type TicketMark = 'ok' | 'fail' | null;
 
 export interface HudSnapshot {
   speedKmh: number;
-  gear: Gear;
-  indicator: IndicatorSide;
-  phase: ExercisePhase;
-  elapsed: number;
-  holdProgress: number;
-  inZone: boolean;
-  hint: Hint;
-  faults: number;
+  ticket: number;
+  total: number;
+  marks: TicketMark[];
   fps: number;
 }
 
 export type GameEvent =
   | { type: 'hud'; hud: HudSnapshot }
   | { type: 'status'; status: GameStatus }
-  | { type: 'fault'; fault: FaultRecord }
-  | { type: 'toast'; text: string }
-  | { type: 'finished'; result: ExerciseResult }
+  | { type: 'decision'; ticket: number; retry: boolean }
+  | { type: 'answer'; ticket: number; option: number; correct: boolean; retry: boolean }
+  | { type: 'crash'; ticket: number; kind: ActorKind }
+  | { type: 'replay'; ticket: number }
+  | { type: 'cleared'; ticket: number }
+  | { type: 'finished'; result: RunResult }
   | { type: 'camera'; mode: CameraMode };
 
 export interface GameOptions {
@@ -62,44 +57,47 @@ export interface GameOptions {
 }
 
 const HUD_INTERVAL = 0.1;
+/** Пішоходи ситуацій трохи більші за реальних — інакше з висоти їх погано видно. */
+const PED_SCALE = 1.25;
+type ActorView = VehicleView | PedestrianView;
 
 export class Game {
-  readonly input = new InputManager();
-  readonly track: Track;
+  readonly sim = new Sim();
   status: GameStatus = 'menu';
   mode: Mode;
 
   private engine: Engine;
   private scene: Scene;
   private rig: CameraRig;
-  private car: CarView;
-  private zoneMat: ReturnType<typeof buildWorld>['zoneMaterial'];
+  private cache: MaterialCache;
+  private city: CityView;
+  private ego: VehicleView;
+  private views = new Map<string, ActorView>();
+  private spawnClock = new Map<string, number>();
+  private prevEgo: Pose;
+  private prevActors = new Map<string, Pose>();
+  private guides: Guides;
+  private effects: Effects;
+  private ambient: Ambient;
   private audio = new AudioEngine();
-  private vehicle: VehicleState;
-  private prev: Pose;
-  private exercise: Exercise;
-  private indicators = new Indicators();
-  private carState: CarTrackState = { inZone: false, offRoad: false, s: 0, lateral: 0 };
   private listeners = new Set<(e: GameEvent) => void>();
-  private accumulator = 0;
-  private simTime = 0;
-  private hudTimer = 0;
-  private wheelSpin = 0;
-  private lastLit = false;
+  private answers: AnswerRecord[] = [];
+  private snapshotAtDecision: ReturnType<Sim['snapshot']> | null = null;
+  private retrying = false;
+  private pausedFrom: GameStatus = 'playing';
   private cameraMode: CameraMode;
-  private lastHintKey = '';
+  private accumulator = 0;
+  private cameraHeading = 0;
+  private clock = 0;
+  private hudTimer = 0;
+  private lastHudKey = '';
   private lastHud: HudSnapshot | null = null;
-  private zoneLit: boolean | null = null;
   private cleanup: Array<() => void> = [];
   private disposed = false;
 
   constructor(canvas: HTMLCanvasElement, opts: GameOptions) {
     this.mode = opts.mode;
     this.cameraMode = opts.camera;
-    this.track = createTrack();
-    this.vehicle = createVehicle(this.track.start);
-    this.prev = { ...this.track.start };
-    this.exercise = new Exercise({ mode: opts.mode, curveStartS: this.track.curve.startS });
     this.audio.setMuted(!opts.sound);
 
     this.engine = new Engine(canvas, opts.quality.antialias, {
@@ -118,57 +116,58 @@ export class Game {
     this.scene = scene;
     scene.detachControl();
     scene.skipPointerMovePicking = true;
-    scene.autoClearDepthAndStencil = true;
     const sky = Color3.FromHexString(COLORS.sky);
     scene.clearColor = new Color4(sky.r, sky.g, sky.b, 1);
     scene.ambientColor = new Color3(0.3, 0.32, 0.34);
     scene.fogMode = Scene.FOGMODE_LINEAR;
     scene.fogColor = sky;
-    scene.fogStart = 70;
-    scene.fogEnd = 220;
+    scene.fogStart = 110;
+    scene.fogEnd = 300;
 
     const hemi = new HemisphericLight('hemi', new Vector3(0.2, 1, 0.1), scene);
-    hemi.intensity = 0.62;
-    hemi.groundColor = new Color3(0.55, 0.6, 0.58);
+    hemi.intensity = 0.66;
+    hemi.groundColor = new Color3(0.5, 0.55, 0.56);
     const sun = new DirectionalLight('sun', new Vector3(-0.45, -1, 0.35), scene);
-    sun.intensity = 0.62;
-    sun.position = new Vector3(40, 60, -20);
+    sun.intensity = 0.6;
 
-    const world = buildWorld(scene, this.track);
-    this.zoneMat = world.zoneMaterial;
-    this.car = new CarView(scene, !opts.quality.shadows);
-    if (opts.quality.shadows) {
-      const sg = new ShadowGenerator(1024, sun);
-      sg.usePercentageCloserFiltering = true;
-      sg.bias = 0.002;
-      for (const m of this.car.casters) sg.addShadowCaster(m, false);
-    }
+    this.cache = new MaterialCache(scene);
+    this.city = buildCity(scene, false);
+    this.ego = new VehicleView(scene, this.cache, 'coupe', COLORS.carBody, true);
+    this.guides = new Guides(scene);
+    this.effects = new Effects(scene);
+    this.ambient = new Ambient(scene, this.cache);
+    this.prevEgo = this.egoPose();
 
-    const center = {
-      x: (this.track.bounds.minX + this.track.bounds.maxX) / 2,
-      z: (this.track.bounds.minZ + this.track.bounds.maxZ) / 2,
-    };
-    this.rig = new CameraRig(scene, center);
+    this.rig = new CameraRig(scene, { x: 70, z: 110 });
     scene.activeCamera = this.rig.camera;
-    this.updateVisuals(1);
+    this.render(0, 1);
 
-    this.input.attachKeyboard(window, {
-      gear: (g) => this.requestGear(g),
-      shiftUp: () => this.shiftBy(-1),
-      shiftDown: () => this.shiftBy(1),
-      indicator: (s) => this.toggleIndicator(s),
-      camera: () => this.toggleCamera(),
-      pause: () => (this.status === 'paused' ? this.resume() : this.pause()),
-    });
-
+    const onKey = (e: KeyboardEvent) => {
+      if (e.repeat) return;
+      const n = Number(e.key);
+      if (this.status === 'decision' && n >= 1 && n <= 4) {
+        const t = this.sim.currentTicket?.ticket;
+        if (t && n <= t.options.length) this.answer(n - 1);
+      } else if (e.key === 'Escape') {
+        if (this.status === 'paused') this.resume();
+        else this.pause();
+      } else if (e.key === 'c' || e.key === 'C' || e.key === 'с' || e.key === 'С') this.toggleCamera();
+      else if ((e.key === 'Enter' || e.key === ' ') && this.status === 'crashed') {
+        e.preventDefault();
+        this.continueAfterCrash();
+      }
+    };
     const onResize = () => {
       applyScaling();
       this.engine.resize();
     };
     const onHidden = () => {
-      if (document.visibilityState === 'hidden') this.interrupt();
+      if (document.visibilityState === 'hidden' && this.status === 'playing') this.pause();
     };
-    const onBlur = () => this.interrupt();
+    const onBlur = () => {
+      if (this.status === 'playing') this.pause();
+    };
+    window.addEventListener('keydown', onKey);
     window.addEventListener('resize', onResize);
     window.addEventListener('orientationchange', onResize);
     window.addEventListener('blur', onBlur);
@@ -176,6 +175,7 @@ export class Game {
     const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(onResize) : null;
     ro?.observe(canvas);
     this.cleanup.push(() => {
+      window.removeEventListener('keydown', onKey);
       window.removeEventListener('resize', onResize);
       window.removeEventListener('orientationchange', onResize);
       window.removeEventListener('blur', onBlur);
@@ -198,22 +198,28 @@ export class Game {
   private setStatus(s: GameStatus) {
     if (this.status === s) return;
     this.status = s;
-    this.audio.setActive(s === 'playing');
+    this.audio.setActive(s === 'playing' || s === 'crashed');
     this.emit({ type: 'status', status: s });
   }
 
-  /** Повний скидання спроби: авто, вправа, покажчики, ввід, камера. */
-  private resetAttempt() {
-    resetVehicle(this.vehicle, this.track.start);
-    this.prev = { ...this.track.start };
-    this.exercise = new Exercise({ mode: this.mode, curveStartS: this.track.curve.startS });
-    this.indicators.reset();
-    this.input.resetAll();
+  get ticketCount() {
+    return this.sim.tickets.length;
+  }
+
+  // ---------- Керування спробою ----------
+
+  private resetRun() {
+    this.sim.reset();
+    this.answers = [];
+    this.snapshotAtDecision = null;
+    this.retrying = false;
     this.accumulator = 0;
-    this.simTime = 0;
-    this.wheelSpin = 0;
-    this.lastHintKey = '';
-    this.carState = evaluateCarOnTrack(this.vehicle, this.track);
+    this.effects.clear();
+    this.guides.hide();
+    for (const v of this.views.values()) v.dispose();
+    this.views.clear();
+    this.spawnClock.clear();
+    this.snapInterpolation();
     this.rig.snap();
   }
 
@@ -221,42 +227,30 @@ export class Game {
     this.mode = mode;
     this.audio.unlock();
     this.audio.resume();
-    this.resetAttempt();
-    this.applyCamera();
+    this.resetRun();
+    this.rig.setMode(this.cameraMode);
     this.setStatus('playing');
     this.emitHud(true);
   }
 
-  restart() {
-    this.start(this.mode);
-  }
-
   toMenu() {
-    this.resetAttempt();
+    this.resetRun();
     this.rig.setMode('orbit');
-    this.car.setDriverView(false);
     this.setStatus('menu');
   }
 
   pause() {
-    if (this.status !== 'playing') return;
-    this.input.resetAll();
+    if (this.status !== 'playing' && this.status !== 'decision' && this.status !== 'crashed') return;
+    this.pausedFrom = this.status;
     this.audio.suspend();
     this.setStatus('paused');
   }
 
   resume() {
     if (this.status !== 'paused') return;
-    this.input.resetAll();
     this.accumulator = 0;
     this.audio.resume();
-    this.setStatus('playing');
-  }
-
-  /** Втрата фокусу, приховування вкладки чи pointercancel: скидаємо команди і ставимо паузу. */
-  interrupt() {
-    this.input.resetAll();
-    this.pause();
+    this.setStatus(this.pausedFrom);
   }
 
   setMuted(m: boolean) {
@@ -266,60 +260,86 @@ export class Game {
 
   toggleCamera() {
     if (this.status === 'menu') return;
-    this.cameraMode = this.cameraMode === 'chase' ? 'driver' : 'chase';
-    this.applyCamera();
+    this.setCameraMode(this.cameraMode === 'follow' ? 'north' : 'follow');
     this.emit({ type: 'camera', mode: this.cameraMode });
   }
 
-  private applyCamera() {
-    this.rig.setMode(this.cameraMode);
-    this.car.setDriverView(this.cameraMode === 'driver');
+  setCameraMode(mode: CameraMode) {
+    this.cameraMode = mode;
+    if (this.status !== 'menu') this.rig.setMode(mode);
   }
 
-  toggleIndicator(side: 'left' | 'right') {
-    if (this.status !== 'playing') return;
-    this.indicators.toggle(side);
+  /** Відповідь на білет. Зараховується лише перша відповідь; повтор після ДТП — для практики. */
+  answer(option: number) {
+    if (this.status !== 'decision') return;
+    const ticket = this.sim.state.ticket;
+    const correct = this.sim.answer(option);
+    if (!this.retrying) this.answers.push({ ticket, option, correct });
+    this.guides.hide();
+    if (correct) this.audio.success();
+    this.emit({ type: 'answer', ticket, option, correct, retry: this.retrying });
+    this.setStatus('playing');
     this.emitHud(true);
   }
 
-  requestGear(g: Gear) {
-    if (this.status !== 'playing') return;
-    const res = requestGear(this.vehicle, g, this.input.brakeHeld);
-    if (!res.ok) {
-      this.emit({
-        type: 'toast',
-        text:
-          res.reason === 'brake'
-            ? 'Натисніть гальмо, щоб вивести селектор із P.'
-            : 'Спершу повністю зупиніться — на ходу цю передачу не ввімкнути.',
-      });
-    }
-    this.emitHud(true);
+  /** Після ДТП: повернутися в момент рішення й обрати ще раз. */
+  retryTicket() {
+    if (this.status !== 'crashed' || !this.snapshotAtDecision) return;
+    this.restoreDecision();
+    this.retrying = true;
+    this.showGuides();
+    this.setStatus('decision');
+    this.emit({ type: 'decision', ticket: this.sim.state.ticket, retry: true });
   }
 
-  private shiftBy(delta: number) {
-    const i = GEARS.indexOf(this.vehicle.gear) + delta;
-    if (i >= 0 && i < GEARS.length) this.requestGear(GEARS[i]);
+  /** Після ДТП: показати, як треба було діяти, і їхати далі. */
+  continueAfterCrash() {
+    if (this.status !== 'crashed' || !this.snapshotAtDecision) return;
+    this.restoreDecision();
+    this.sim.answer(this.sim.correctOption());
+    this.retrying = false;
+    this.setStatus('playing');
+    this.emit({ type: 'replay', ticket: this.sim.state.ticket });
   }
+
+  private restoreDecision() {
+    this.sim.restore(this.snapshotAtDecision!);
+    this.effects.clear();
+    this.accumulator = 0;
+    this.snapInterpolation();
+  }
+
+  // ---------- Цикл ----------
 
   private frame() {
     if (this.disposed) return;
-    const dt = Math.min(0.25, this.engine.getDeltaTime() / 1000);
-    if (this.status === 'playing') {
+    const dt = Math.min(0.1, this.engine.getDeltaTime() / 1000);
+    const running = this.status === 'playing' || this.status === 'crashed';
+    if (running) {
+      this.clock += dt;
       this.accumulator += dt;
       let steps = 0;
       while (this.accumulator >= SIM_DT && steps < MAX_STEPS_PER_FRAME) {
-        this.simStep();
+        this.captureInterpolation();
+        this.handle(this.sim.step(SIM_DT));
         this.accumulator -= SIM_DT;
         steps++;
-        if (this.status !== 'playing') break;
+        if (this.status !== 'playing' && this.status !== 'crashed') break;
       }
       if (steps === MAX_STEPS_PER_FRAME) this.accumulator = 0;
+      this.effects.update(dt);
+      this.ambient.update(dt);
+    } else if (this.status === 'decision' || this.status === 'menu') {
+      // Світ на паузі, але кільця підказок пульсують.
+      this.clock += dt;
+      if (this.status === 'menu') this.ambient.update(dt);
     }
-    const alpha = this.status === 'playing' ? this.accumulator / SIM_DT : 1;
-    this.updateVisuals(alpha);
-    this.rig.update(this.renderPose(alpha), dt);
-    this.audio.updateEngine(this.vehicle.speed, this.vehicle.throttle, this.status === 'playing');
+    const alpha = this.status === 'playing' || this.status === 'crashed' ? this.accumulator / SIM_DT : 1;
+    this.render(dt, alpha);
+
+    const e = this.sim.state.ego;
+    this.audio.updateEngine(e.v, e.braking ? 0 : Math.min(1, e.v / 6), running);
+    this.audio.updateSiren(running ? this.sirenVolume() : 0, this.clock);
 
     this.hudTimer += dt;
     if (this.hudTimer >= HUD_INTERVAL) {
@@ -329,110 +349,180 @@ export class Game {
     this.scene.render();
   }
 
-  private simStep() {
-    const v = this.vehicle;
-    this.prev = { x: v.x, z: v.z, heading: v.heading };
-    const cmd = this.input.sample(SIM_DT);
-    stepVehicle(v, cmd, SIM_DT);
-    const contacts = resolveCollisions(v, this.track.obstacles);
-    for (const c of contacts) if (c.impact > 0.4) this.audio.thud(c.impact);
-    this.indicators.update(v.steer);
-    this.simTime += SIM_DT;
-    this.wheelSpin += (v.speed / CAR.wheelRadius) * SIM_DT;
-    const lit = this.indicators.side !== 'none' && Indicators.lit(this.simTime);
-    if (lit !== this.lastLit && this.indicators.side !== 'none') this.audio.tick(lit);
-    this.lastLit = lit;
-
-    this.carState = evaluateCarOnTrack(v, this.track);
-    const events = this.exercise.step({
-      dt: SIM_DT,
-      speedKmh: msToKmh(v.speed),
-      gear: v.gear,
-      inZone: this.carState.inZone,
-      offRoad: this.carState.offRoad,
-      contacts,
-      s: this.carState.s,
-      moved: v.odometer,
-      indicator: this.indicators.side,
-    });
-    for (const e of events) {
-      if (e.type === 'fault') this.emit({ type: 'fault', fault: e.fault });
-      else if (e.type === 'finished') {
-        this.indicators.reset();
-        this.input.resetAll();
-        if (e.result.success) this.audio.success();
-        else this.audio.fail();
-        this.setStatus('finished');
-        this.emit({ type: 'finished', result: e.result });
+  private handle(events: ReturnType<Sim['step']>) {
+    for (const ev of events) {
+      switch (ev.type) {
+        case 'decision':
+          this.snapshotAtDecision = this.sim.snapshot();
+          this.retrying = false;
+          this.showGuides();
+          this.audio.ding();
+          this.setStatus('decision');
+          this.emit({ type: 'decision', ticket: ev.ticket, retry: false });
+          break;
+        case 'crash': {
+          const ped = ev.crash.kind === 'pedestrian';
+          this.effects.burst(ev.crash.x, ev.crash.z, ev.crash.strength, ped);
+          this.rig.kick(ped ? 0.6 : Math.min(2.2, 0.8 + ev.crash.strength * 0.1));
+          this.audio.crash(ev.crash.strength, ped);
+          this.emit({ type: 'crash', ticket: ev.crash.ticket, kind: ev.crash.kind });
+          break;
+        }
+        case 'crashSettled':
+          this.setStatus('crashed');
+          break;
+        case 'ticketCleared':
+          this.retrying = false;
+          this.emit({ type: 'cleared', ticket: ev.ticket });
+          break;
+        case 'finished': {
+          const result = buildResult(this.mode, this.answers, this.sim.tickets.length, this.sim.state.time);
+          this.audio.setActive(false);
+          if (result.passed) this.audio.success();
+          else this.audio.fail();
+          this.setStatus('finished');
+          this.emit({ type: 'finished', result });
+          break;
+        }
       }
     }
   }
 
-  private renderPose(alpha: number): Pose {
-    const v = this.vehicle;
-    return {
-      x: lerp(this.prev.x, v.x, alpha),
-      z: lerp(this.prev.z, v.z, alpha),
-      heading: lerpAngle(this.prev.heading, v.heading, alpha),
-    };
+  private showGuides() {
+    const t = this.sim.currentTicket;
+    if (!t) return;
+    const st = this.sim.state;
+    const actors = st.actors
+      .filter((a) => a.ticket === st.ticket && a.alive)
+      .map((a) => ({ x: a.x, z: a.z, heading: a.heading, size: a.kind === 'pedestrian' ? 2.6 : KINDS[a.kind].length + 1.4 }));
+    const toS = Math.max(...t.actors.map((a) => a.egoConflictS)) + 6;
+    this.guides.show(this.sim.egoPath, st.ego.s, toS, actors);
   }
 
-  private updateVisuals(alpha: number) {
-    const v = this.vehicle;
-    const lit = this.indicators.side !== 'none' && Indicators.lit(this.simTime);
-    this.car.update(this.renderPose(alpha), {
-      steerAngle: steerAngle(v),
-      steer: v.steer,
-      wheelSpin: this.wheelSpin,
-      braking: v.brake > 0.05 || v.gear === 'P',
-      reversing: v.gear === 'R',
-      leftLit: lit && this.indicators.side === 'left',
-      rightLit: lit && this.indicators.side === 'right',
+  private sirenVolume() {
+    const e = this.sim.state.ego;
+    let v = 0;
+    for (const a of this.sim.state.actors)
+      if (a.siren && a.alive && !a.body) v = Math.max(v, 1 - Math.hypot(a.x - e.x, a.z - e.z) / 110);
+    return Math.max(0, v);
+  }
+
+  // ---------- Рендер ----------
+
+  private egoPose(): Pose {
+    const e = this.sim.state.ego;
+    return { x: e.x, z: e.z, heading: e.heading };
+  }
+
+  private captureInterpolation() {
+    this.prevEgo = this.egoPose();
+    this.prevActors.clear();
+    for (const a of this.sim.state.actors) this.prevActors.set(a.id, { x: a.x, z: a.z, heading: a.heading });
+  }
+
+  private snapInterpolation() {
+    this.captureInterpolation();
+  }
+
+  private lerpPose(prev: Pose | undefined, cur: Pose, alpha: number): Pose {
+    if (!prev) return cur;
+    return { x: lerp(prev.x, cur.x, alpha), z: lerp(prev.z, cur.z, alpha), heading: lerpAngle(prev.heading, cur.heading, alpha) };
+  }
+
+  private render(dt: number, alpha: number) {
+    const st = this.sim.state;
+    const e = st.ego;
+    const egoPose = this.lerpPose(this.prevEgo, this.egoPose(), alpha);
+    const since = st.crash ? st.time - st.crash.time : -1;
+    this.ego.update(egoPose, {
+      steerAngle: e.body ? 0 : e.steer,
+      wheelSpin: e.wheelSpin,
+      braking: e.braking,
+      indicator: e.indicator,
+      clock: this.clock,
+      siren: false,
+      bounce: since >= 0 ? 0.14 * Math.exp(-4 * since) * Math.abs(Math.sin(since * 16)) : 0,
     });
-    // Підсвічування зони — підказка лише в режимі навчання.
-    const zoneLit = this.mode === 'training' && this.status !== 'menu' && this.carState.inZone;
-    if (zoneLit !== this.zoneLit) {
-      this.zoneLit = zoneLit;
-      this.zoneMat.emissiveColor = zoneLit ? new Color3(0.2, 0.75, 0.45) : Color3.FromHexString(COLORS.zone).scale(0.4);
-      this.zoneMat.alpha = zoneLit ? 0.5 : 0.32;
+
+    const ids = new Set(st.actors.map((a) => a.id));
+    for (const [id, v] of this.views)
+      if (!ids.has(id)) {
+        v.dispose();
+        this.views.delete(id);
+        this.spawnClock.delete(id);
+      }
+    for (const a of st.actors) this.renderActor(a, alpha);
+
+    this.city.trafficLights.update(st.lights);
+    this.guides.update(this.clock);
+    // Під час ДТП авто крутиться — камера тримає напрямок, який був до удару.
+    if (!st.crash) this.cameraHeading = egoPose.heading;
+    const w = this.engine.getRenderWidth();
+    const h = this.engine.getRenderHeight();
+    this.rig.aspect = w / Math.max(1, h);
+    const card = this.status === 'decision' || this.status === 'crashed';
+    const wide = (this.scene.getEngine().getRenderingCanvas()?.clientWidth ?? 0) > 640;
+    this.rig.update(egoPose, dt, { focus: this.focus(), heading: this.cameraHeading, rightInset: card && wide ? 0.34 : 0 });
+  }
+
+  private renderActor(a: ActorState, alpha: number) {
+    let view = this.views.get(a.id);
+    if (!a.alive) {
+      view?.setVisible(false);
+      return;
+    }
+    if (!view) {
+      view =
+        a.kind === 'pedestrian'
+          ? new PedestrianView(this.scene, this.cache, a.color)
+          : new VehicleView(this.scene, this.cache, a.kind, a.color, true);
+      this.views.set(a.id, view);
+      this.spawnClock.set(a.id, this.clock);
+    }
+    view.setVisible(true);
+    const pose = this.lerpPose(this.prevActors.get(a.id), { x: a.x, z: a.z, heading: a.heading }, alpha);
+    if (view instanceof PedestrianView) {
+      const appear = Math.min(1, (this.clock - (this.spawnClock.get(a.id) ?? 0)) / 0.35);
+      const fall = a.body ? Math.min(1, a.hitTime / 0.45) : 0;
+      view.update(pose, a.s, a.v > 0 && !a.body, fall, appear * PED_SCALE);
+    } else {
+      const r = a.kind === 'bus' ? 0.5 : 0.33;
+      view.update(pose, {
+        steerAngle: 0,
+        wheelSpin: a.s / r,
+        braking: !!a.body,
+        indicator: a.body ? 'hazard' : 'none',
+        clock: this.clock,
+        siren: a.siren,
+        bounce: 0,
+      });
     }
   }
 
+  private focus(): CameraFocus | null {
+    const st = this.sim.state;
+    const t = this.sim.currentTicket;
+    if (!t || st.phase === 'driving' || st.phase === 'finished') return null;
+    const p = st.crash ? { x: st.crash.x, z: st.crash.z } : t.actors[0].conflict;
+    return { point: p, weight: st.crash ? 0.6 : 0.45, dist: st.crash ? 40 : 48 };
+  }
+
   private emitHud(force: boolean) {
-    const v = this.vehicle;
-    const ex = this.exercise;
-    const hint = exerciseHint({
-      mode: this.mode,
-      phase: ex.phase,
-      gear: v.gear,
-      brake: this.input.brakeHeld,
-      speedKmh: msToKmh(v.speed),
-      s: this.carState.s,
-      curveStartS: this.track.curve.startS,
-      curveEndS: this.track.curve.endS,
-      zoneStartS: this.track.zoneS.start,
-      zoneEndS: this.track.zoneS.end,
-      holdTime: ex.holdTime,
-      stopHold: ex.stopHoldSeconds,
-      inZone: this.carState.inZone,
-      indicator: this.indicators.side,
-      limitKmh: EXERCISE.speedLimitKmh,
+    const st = this.sim.state;
+    const marks: TicketMark[] = this.sim.tickets.map((_, i) => {
+      const a = this.answers.find((x) => x.ticket === i);
+      return a ? (a.correct ? 'ok' : 'fail') : null;
     });
     const hud: HudSnapshot = {
-      speedKmh: Math.round(Math.abs(msToKmh(v.speed))),
-      gear: v.gear,
-      indicator: this.indicators.side,
-      phase: ex.phase,
-      elapsed: Math.floor(ex.elapsed * 10) / 10,
-      holdProgress: Math.min(1, ex.holdTime / ex.stopHoldSeconds),
-      inZone: this.carState.inZone,
-      hint,
-      faults: ex.faults.length,
+      speedKmh: Math.round(msToKmh(st.ego.v)),
+      ticket: Math.min(st.ticket, this.sim.tickets.length - 1),
+      total: this.sim.tickets.length,
+      marks,
       fps: Math.round(this.engine.getFps()),
     };
     const key = JSON.stringify(hud);
-    if (!force && key === this.lastHintKey) return;
-    this.lastHintKey = key;
+    if (!force && key === this.lastHudKey) return;
+    this.lastHudKey = key;
     this.lastHud = hud;
     this.emit({ type: 'hud', hud });
   }
@@ -441,10 +531,14 @@ export class Game {
     return this.lastHud;
   }
 
+  /** Відповідь, обрана для поточного білета (для екрана ДТП). */
+  get lastAnswer() {
+    return this.sim.state.answer;
+  }
+
   dispose() {
     this.disposed = true;
     this.cleanup.forEach((c) => c());
-    this.input.dispose();
     this.audio.dispose();
     this.listeners.clear();
     this.engine.stopRenderLoop();

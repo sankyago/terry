@@ -1,5 +1,5 @@
 import type { Settings } from '../storage/storage';
-import { CameraIcon, PlayIcon, RestartIcon, SoundOffIcon, SoundOnIcon } from './icons';
+import { CameraIcon, CompassIcon, PlayIcon, RestartIcon, SoundOffIcon, SoundOnIcon } from './icons';
 
 interface Props {
   settings: Settings;
@@ -24,7 +24,8 @@ export function PauseMenu({ settings, onResume, onRestart, onCamera, onSound, on
             <RestartIcon width={18} height={18} /> Почати заново
           </button>
           <button className="secondary" onClick={onCamera}>
-            <CameraIcon width={18} height={18} /> {settings.camera === 'chase' ? 'Камера: ззаду' : 'Камера: водій'}
+            {settings.camera === 'follow' ? <CameraIcon width={18} height={18} /> : <CompassIcon width={18} height={18} />}
+            {settings.camera === 'follow' ? 'Камера: за авто' : 'Камера: північ'}
           </button>
           <button className="secondary" onClick={onSound}>
             {settings.sound ? <SoundOnIcon width={18} height={18} /> : <SoundOffIcon width={18} height={18} />}

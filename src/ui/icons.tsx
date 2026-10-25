@@ -47,11 +47,6 @@ export const RestartIcon = (p: SVGProps<SVGSVGElement>) => (
     <path d="M4 4v4h4" />
   </svg>
 );
-export const ArrowIcon = ({ dir, ...p }: SVGProps<SVGSVGElement> & { dir: 'left' | 'right' }) => (
-  <svg {...base(p)} style={{ transform: dir === 'left' ? 'scaleX(-1)' : undefined }}>
-    <path d="M4 9h9V4l8 8-8 8v-5H4z" fill="currentColor" stroke="none" />
-  </svg>
-);
 export const CheckIcon = (p: SVGProps<SVGSVGElement>) => (
   <svg {...base(p)}>
     <path d="M5 12.5l4.5 4.5L19 7.5" />
@@ -66,5 +61,17 @@ export const RotateIcon = (p: SVGProps<SVGSVGElement>) => (
   <svg {...base(p)}>
     <rect x="7" y="3" width="10" height="18" rx="2" />
     <path d="M20 14a6 6 0 01-5 5.5M20 14l1.5 2M20 14l-2.2 1" />
+  </svg>
+);
+export const CompassIcon = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)}>
+    <circle cx="12" cy="12" r="9" />
+    <path d="M12 6l2.5 6H9.5z" fill="currentColor" />
+  </svg>
+);
+export const AlertIcon = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)}>
+    <path d="M12 3l10 18H2z" />
+    <path d="M12 10v5M12 18v.5" />
   </svg>
 );

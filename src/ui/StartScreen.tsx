@@ -1,22 +1,29 @@
-import type { Mode } from '../exercise/types';
-import type { Progress, QualitySetting, Settings, TouchSetting } from '../storage/storage';
-import { formatTime } from './format';
+import type { Mode, Progress, QualitySetting, Settings } from '../storage/storage';
+import { EXAM_MAX_MISTAKES } from '../storage/storage';
+import { TICKETS } from '../tickets/tickets';
 import { SoundOffIcon, SoundOnIcon } from './icons';
 
 interface Props {
   settings: Settings;
   progress: Progress;
-  touch: boolean;
   onChange(patch: Partial<Settings>): void;
   onStart(mode: Mode): void;
 }
 
 const MODES: Array<{ id: Mode; title: string; text: string }> = [
-  { id: 'training', title: 'Навчання', text: 'Покрокові підказки й пояснення помилок одразу.' },
-  { id: 'check', title: 'Перевірка', text: 'Без підказок. Оцінка — після завершення.' },
+  {
+    id: 'training',
+    title: 'Навчання',
+    text: 'Пояснення після кожної відповіді. Після ДТП можна переграти ситуацію.',
+  },
+  {
+    id: 'exam',
+    title: 'Іспит',
+    text: `Без пояснень до кінця маршруту. Складено, якщо помилок не більше ${EXAM_MAX_MISTAKES}.`,
+  },
 ];
 
-export function StartScreen({ settings, progress, touch, onChange, onStart }: Props) {
+export function StartScreen({ settings, progress, onChange, onStart }: Props) {
   const p = progress[settings.mode];
   return (
     <div className="overlay start">
@@ -32,16 +39,16 @@ export function StartScreen({ settings, progress, touch, onChange, onStart }: Pr
           </div>
           <div>
             <h1>Cruise</h1>
-            <p className="muted small">Практика водіння у 3D</p>
+            <p className="muted small">Інтерактивні білети ПДР</p>
           </div>
         </header>
 
         <section className="exercise">
-          <span className="eyebrow">Вправа</span>
-          <h2>Зупинка в позначеній зоні</h2>
+          <span className="eyebrow">Маршрут містом · {TICKETS.length} ситуацій</span>
+          <h2>Ви керуєте рішеннями, а не кермом</h2>
           <p className="muted small">
-            Рушайте зі старту, проїдьте дорогою з поворотом, плавно зупиніться всім корпусом у зоні, зачекайте 2 с і
-            увімкніть P.
+            Авто саме їде містом. Коли воно зупиняється, гра стає на паузу й показує білет: оберіть, як діяти. Помилка —
+            і ви побачите, чим вона закінчується на дорозі.
           </p>
         </section>
 
@@ -61,15 +68,23 @@ export function StartScreen({ settings, progress, touch, onChange, onStart }: Pr
         <p className="muted small mode-text">{MODES.find((m) => m.id === settings.mode)!.text}</p>
 
         <button className="primary big" onClick={() => onStart(settings.mode)}>
-          Почати
+          Почати маршрут
         </button>
 
         <p className="stats small">
-          Спроб: <b>{p.attempts}</b> · Успішних: <b>{p.successes}</b>
-          {p.bestTime !== null && (
+          Спроб: <b>{p.attempts}</b>
+          {settings.mode === 'exam' && (
             <>
               {' '}
-              · Найкращий час: <b>{formatTime(p.bestTime)}</b>
+              · Складено: <b>{p.passes}</b>
+            </>
+          )}
+          {p.bestScore !== null && (
+            <>
+              {' '}
+              · Найкраще: <b>
+                {p.bestScore}/{TICKETS.length}
+              </b>
             </>
           )}
         </p>
@@ -85,6 +100,13 @@ export function StartScreen({ settings, progress, touch, onChange, onStart }: Pr
             {settings.sound ? 'Звук' : 'Без звуку'}
           </button>
           <label className="chip select">
+            Камера
+            <select value={settings.camera} onChange={(e) => onChange({ camera: e.target.value as Settings['camera'] })}>
+              <option value="follow">За авто</option>
+              <option value="north">Північ угорі</option>
+            </select>
+          </label>
+          <label className="chip select">
             Якість
             <select value={settings.quality} onChange={(e) => onChange({ quality: e.target.value as QualitySetting })}>
               <option value="auto">Авто</option>
@@ -92,27 +114,11 @@ export function StartScreen({ settings, progress, touch, onChange, onStart }: Pr
               <option value="high">Висока</option>
             </select>
           </label>
-          <label className="chip select">
-            Керування
-            <select
-              value={settings.touchControls}
-              onChange={(e) => onChange({ touchControls: e.target.value as TouchSetting })}
-            >
-              <option value="auto">Авто</option>
-              <option value="on">Екранне</option>
-              <option value="off">Клавіатура</option>
-            </select>
-          </label>
         </div>
 
-        {!touch && (
-          <p className="muted tiny keys">
-            W/↑ газ · S/↓ гальмо · Пробіл — повне гальмо · A/D, ←/→ кермо · 1–4 або P/R/N — селектор · Q/E
-            поворотники · C камера · Esc пауза
-          </p>
-        )}
+        <p className="muted tiny keys">1–3 — відповідь · C — камера · Esc — пауза · Enter — далі після ДТП</p>
         <p className="muted tiny disclaimer">
-          Авторська навчальна вправа. Оцінювання не є офіційними критеріями практичного іспиту.
+          Навчальний тренажер. Ситуації спрощені; пункти ПДР вказано для довідки — звіряйтеся з чинною редакцією.
         </p>
       </div>
     </div>

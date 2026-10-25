@@ -8,7 +8,7 @@ export function RotateHint() {
   return (
     <div className="rotate-hint glass" role="note">
       <RotateIcon />
-      <span>Для зручного керування поверніть телефон горизонтально</span>
+      <span>Поверніть телефон горизонтально — буде видно більше міста</span>
       <button className="link" onClick={() => setHidden(true)} aria-label="Закрити пораду">
         Зрозуміло
       </button>

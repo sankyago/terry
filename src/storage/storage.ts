@@ -1,44 +1,58 @@
-import type { ExerciseResult, Mode } from '../exercise/types';
-
-export type CameraMode = 'chase' | 'driver';
+export type Mode = 'training' | 'exam';
+export type CameraMode = 'follow' | 'north';
 export type QualitySetting = 'auto' | 'low' | 'high';
-export type TouchSetting = 'auto' | 'on' | 'off';
 
 export interface Settings {
   mode: Mode;
   camera: CameraMode;
   sound: boolean;
   quality: QualitySetting;
-  touchControls: TouchSetting;
   showFps: boolean;
+}
+
+export interface AnswerRecord {
+  ticket: number;
+  option: number;
+  correct: boolean;
+}
+
+export interface RunResult {
+  mode: Mode;
+  answers: AnswerRecord[];
+  correct: number;
+  total: number;
+  passed: boolean;
+  time: number;
 }
 
 export interface ModeProgress {
   attempts: number;
-  successes: number;
-  bestTime: number | null;
+  passes: number;
+  bestScore: number | null;
 }
 
 export interface Progress {
   training: ModeProgress;
-  check: ModeProgress;
-  lastResult: ExerciseResult | null;
+  exam: ModeProgress;
+  lastResult: RunResult | null;
 }
 
-const KEY = 'cruise.v1';
+/** Авторський критерій іспиту: не більше однієї помилки. */
+export const EXAM_MAX_MISTAKES = 1;
+
+const KEY = 'cruise.v2';
 
 export const DEFAULT_SETTINGS: Settings = {
   mode: 'training',
-  camera: 'chase',
+  camera: 'follow',
   sound: true,
   quality: 'auto',
-  touchControls: 'auto',
   showFps: false,
 };
 
 const emptyProgress = (): Progress => ({
-  training: { attempts: 0, successes: 0, bestTime: null },
-  check: { attempts: 0, successes: 0, bestTime: null },
+  training: { attempts: 0, passes: 0, bestScore: null },
+  exam: { attempts: 0, passes: 0, bestScore: null },
   lastResult: null,
 });
 
@@ -72,7 +86,7 @@ export function load(store: KeyValueStore | null = defaultStore()): Stored {
       settings: { ...DEFAULT_SETTINGS, ...(data.settings ?? {}) },
       progress: {
         training: { ...p.training, ...(data.progress?.training ?? {}) },
-        check: { ...p.check, ...(data.progress?.check ?? {}) },
+        exam: { ...p.exam, ...(data.progress?.exam ?? {}) },
         lastResult: data.progress?.lastResult ?? null,
       },
     };
@@ -90,13 +104,17 @@ export function save(data: Stored, store: KeyValueStore | null = defaultStore())
   }
 }
 
-export function recordResult(progress: Progress, result: ExerciseResult): Progress {
+export function buildResult(mode: Mode, answers: AnswerRecord[], total: number, time: number): RunResult {
+  const correct = answers.filter((a) => a.correct).length;
+  return { mode, answers, correct, total, passed: total - correct <= EXAM_MAX_MISTAKES, time };
+}
+
+export function recordResult(progress: Progress, result: RunResult): Progress {
   const prev = progress[result.mode];
   const next: ModeProgress = {
     attempts: prev.attempts + 1,
-    successes: prev.successes + (result.success ? 1 : 0),
-    bestTime:
-      result.success && (prev.bestTime === null || result.time < prev.bestTime) ? result.time : prev.bestTime,
+    passes: prev.passes + (result.passed ? 1 : 0),
+    bestScore: prev.bestScore === null ? result.correct : Math.max(prev.bestScore, result.correct),
   };
   return { ...progress, [result.mode]: next, lastResult: result };
 }

@@ -1,4 +1,4 @@
-/** Простий синтезований звук без зовнішніх файлів: двигун, покажчики, удар, успіх. */
+/** Простий синтезований звук без зовнішніх файлів: двигун, покажчики, сирена, ДТП, сигнали відповіді. */
 export class AudioEngine {
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
@@ -6,6 +6,9 @@ export class AudioEngine {
   private osc1: OscillatorNode | null = null;
   private osc2: OscillatorNode | null = null;
   private filter: BiquadFilterNode | null = null;
+  private sirenOsc: OscillatorNode | null = null;
+  private sirenGain: GainNode | null = null;
+  private noise: AudioBuffer | null = null;
   private muted = false;
   private active = false;
 
@@ -38,6 +41,17 @@ export class AudioEngine {
       this.engineGain.connect(this.master);
       this.osc1.start();
       this.osc2.start();
+      // Сирена: тон, що «гуляє» вгору-вниз; гучність задається відстанню до швидкої.
+      this.sirenOsc = ctx.createOscillator();
+      this.sirenOsc.type = 'triangle';
+      this.sirenGain = ctx.createGain();
+      this.sirenGain.gain.value = 0;
+      this.sirenOsc.connect(this.sirenGain).connect(this.master);
+      this.sirenOsc.start();
+      const len = Math.floor(ctx.sampleRate * 0.8);
+      this.noise = ctx.createBuffer(1, len, ctx.sampleRate);
+      const data = this.noise.getChannelData(0);
+      for (let i = 0; i < len; i++) data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 2);
     } catch {
       this.ctx = null;
     }
@@ -52,6 +66,15 @@ export class AudioEngine {
   setActive(a: boolean) {
     this.active = a;
     if (!a && this.engineGain && this.ctx) this.engineGain.gain.setTargetAtTime(0, this.ctx.currentTime, 0.05);
+  }
+
+  /** volume 0..1; clock — секунди, для модуляції тону. */
+  updateSiren(volume: number, clock: number) {
+    if (!this.ctx || !this.sirenOsc || !this.sirenGain) return;
+    const t = this.ctx.currentTime;
+    const v = this.active ? volume : 0;
+    this.sirenGain.gain.setTargetAtTime(v * 0.07, t, 0.1);
+    this.sirenOsc.frequency.setTargetAtTime(Math.floor(clock * 1.6) % 2 === 0 ? 720 : 960, t, 0.05);
   }
 
   updateEngine(speedMs: number, throttle: number, running: boolean) {
@@ -84,9 +107,30 @@ export class AudioEngine {
     this.blip(on ? 1500 : 1100, 0.03, 'square', 0.05);
   }
 
-  thud(strength: number) {
-    this.blip(70, 0.25, 'sine', Math.min(0.5, 0.15 + strength * 0.08));
-    this.blip(140, 0.12, 'triangle', 0.08);
+  /** Удар: шумовий сплеск, низький «бум» і дзенькіт скла. */
+  crash(strength: number, pedestrian: boolean) {
+    if (!this.ctx || !this.master || this.muted) return;
+    const t = this.ctx.currentTime;
+    if (this.noise) {
+      const src = this.ctx.createBufferSource();
+      src.buffer = this.noise;
+      const f = this.ctx.createBiquadFilter();
+      f.type = 'lowpass';
+      f.frequency.value = pedestrian ? 700 : 2200;
+      const g = this.ctx.createGain();
+      g.gain.value = Math.min(0.9, 0.35 + strength * 0.04);
+      src.connect(f).connect(g).connect(this.master);
+      src.start(t);
+    }
+    this.blip(55, 0.5, 'sine', Math.min(0.6, 0.25 + strength * 0.03));
+    this.blip(110, 0.2, 'triangle', 0.12);
+    if (!pedestrian) for (let i = 0; i < 6; i++) this.blip(2400 + Math.random() * 2600, 0.08, 'sine', 0.03, 0.05 + i * 0.05);
+  }
+
+  /** Поява нового білета. */
+  ding() {
+    this.blip(880, 0.18, 'sine', 0.12);
+    this.blip(1320, 0.25, 'sine', 0.08, 0.09);
   }
 
   success() {
@@ -108,6 +152,7 @@ export class AudioEngine {
   }
 
   dispose() {
+    this.sirenOsc?.stop();
     void this.ctx?.close().catch(() => {});
     this.ctx = null;
   }

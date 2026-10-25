@@ -1,21 +1,31 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { GameStatus, HudSnapshot } from '../game/Game';
 import { Game } from '../game/Game';
-import type { ExerciseResult, Mode } from '../exercise/types';
-import { FAULT_LABELS } from '../exercise/texts';
-import { isTouchDevice, resolveQuality } from '../scene/quality';
-import type { Progress, Settings } from '../storage/storage';
+import type { ActorKind } from '../sim/kinds';
+import { resolveQuality } from '../scene/quality';
+import type { Mode, Progress, RunResult, Settings } from '../storage/storage';
 import { load, recordResult, save } from '../storage/storage';
+import { TICKETS } from '../tickets/tickets';
 import { Hud } from './Hud';
 import { PauseMenu } from './PauseMenu';
 import { Results } from './Results';
 import { RotateHint } from './RotateHint';
 import { StartScreen } from './StartScreen';
-import type { Toast } from './Toasts';
-import { Toasts } from './Toasts';
-import { TouchControls } from './TouchControls';
+import { CrashCard, CrashFlash, Feedback, TicketCard } from './TicketCard';
 
-let toastId = 0;
+interface Decision {
+  ticket: number;
+  retry: boolean;
+}
+interface FeedbackState {
+  ticket: number;
+  kind: 'correct' | 'replay';
+}
+interface CrashState {
+  ticket: number;
+  kind: ActorKind;
+  option: number | null;
+}
 
 export function App() {
   const initial = useMemo(() => load(), []);
@@ -23,8 +33,11 @@ export function App() {
   const [progress, setProgress] = useState<Progress>(initial.progress);
   const [status, setStatus] = useState<GameStatus>('menu');
   const [hud, setHud] = useState<HudSnapshot | null>(null);
-  const [result, setResult] = useState<ExerciseResult | null>(null);
-  const [toasts, setToasts] = useState<Toast[]>([]);
+  const [decision, setDecision] = useState<Decision | null>(null);
+  const [feedback, setFeedback] = useState<FeedbackState | null>(null);
+  const [crash, setCrash] = useState<CrashState | null>(null);
+  const [flash, setFlash] = useState<{ kind: ActorKind; id: number } | null>(null);
+  const [result, setResult] = useState<RunResult | null>(null);
   const [game, setGame] = useState<Game | null>(null);
   const [error, setError] = useState<string | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -32,15 +45,15 @@ export function App() {
   settingsRef.current = settings;
 
   const quality = useMemo(() => resolveQuality(settings.quality), [settings.quality]);
-  const touch = settings.touchControls === 'auto' ? isTouchDevice() : settings.touchControls === 'on';
 
   useEffect(() => save({ settings, progress }), [settings, progress]);
 
-  const pushToast = useCallback((t: Omit<Toast, 'id'>) => {
-    const id = ++toastId;
-    setToasts((list) => [...list.slice(-2), { ...t, id }]);
-    window.setTimeout(() => setToasts((list) => list.filter((x) => x.id !== id)), t.tone === 'warn' ? 4500 : 2600);
-  }, []);
+  // Плашка з поясненням ховається через кілька секунд після того, як ситуацію пройдено.
+  useEffect(() => {
+    if (!feedback) return;
+    const id = window.setTimeout(() => setFeedback(null), 9000);
+    return () => window.clearTimeout(id);
+  }, [feedback]);
 
   // Гра створюється один раз на рівень якості (антиаліасинг задається при створенні WebGL-контексту).
   useEffect(() => {
@@ -62,13 +75,27 @@ export function App() {
         case 'status':
           setStatus(e.status);
           break;
-        case 'fault':
-          if (g.mode === 'training') pushToast({ tone: 'warn', title: FAULT_LABELS[e.fault.kind], text: e.fault.message });
+        case 'decision':
+          setFeedback(null);
+          setCrash(null);
+          setDecision({ ticket: e.ticket, retry: e.retry });
           break;
-        case 'toast':
-          pushToast({ tone: 'info', text: e.text });
+        case 'answer':
+          setDecision(null);
+          if (e.correct) setFeedback({ ticket: e.ticket, kind: 'correct' });
+          break;
+        case 'crash':
+          setFlash({ kind: e.kind, id: Date.now() });
+          setCrash({ ticket: e.ticket, kind: e.kind, option: g.lastAnswer });
+          break;
+        case 'replay':
+          setCrash(null);
+          setFeedback({ ticket: e.ticket, kind: 'replay' });
+          break;
+        case 'cleared':
           break;
         case 'finished':
+          setFeedback(null);
           setResult(e.result);
           setProgress((p) => recordResult(p, e.result));
           break;
@@ -86,15 +113,25 @@ export function App() {
       g.dispose();
       setGame(null);
     };
-  }, [quality, pushToast]);
+  }, [quality]);
+
+  useEffect(() => {
+    if (!flash) return;
+    const id = window.setTimeout(() => setFlash(null), 1800);
+    return () => window.clearTimeout(id);
+  }, [flash]);
 
   const update = (patch: Partial<Settings>) => setSettings((s) => ({ ...s, ...patch }));
 
   const start = (mode: Mode) => {
     update({ mode });
     setResult(null);
-    setToasts([]);
+    setDecision(null);
+    setFeedback(null);
+    setCrash(null);
+    setFlash(null);
     game?.setMuted(!settings.sound);
+    game?.setCameraMode(settings.camera);
     game?.start(mode);
   };
 
@@ -104,11 +141,19 @@ export function App() {
     game?.setMuted(!sound);
   };
 
-  const playing = status === 'playing' || status === 'paused';
+  const toMenu = () => {
+    setDecision(null);
+    setFeedback(null);
+    setCrash(null);
+    game?.toMenu();
+  };
+
+  const inRun = status === 'playing' || status === 'decision' || status === 'crashed' || status === 'paused';
+  const mode = settings.mode;
 
   return (
     <div className="app no-menu">
-      <canvas key={quality.level} ref={canvasRef} className="scene" aria-label="3D-сцена тренувального майданчика" />
+      <canvas key={quality.level} ref={canvasRef} className="scene" aria-label="3D-сцена міста" />
       {error && (
         <div className="overlay center">
           <div className="glass card">
@@ -117,54 +162,59 @@ export function App() {
           </div>
         </div>
       )}
-      {game && status === 'menu' && (
-        <StartScreen
-          settings={settings}
-          progress={progress}
-          touch={touch}
-          onChange={update}
-          onStart={start}
+      {game && status === 'menu' && <StartScreen settings={settings} progress={progress} onChange={update} onStart={start} />}
+      {game && inRun && hud && (
+        <Hud
+          hud={hud}
+          mode={mode}
+          camera={settings.camera}
+          sound={settings.sound}
+          showFps={settings.showFps}
+          onPause={() => game.pause()}
+          onCamera={() => game.toggleCamera()}
+          onSound={toggleSound}
         />
       )}
-      {game && playing && hud && (
-        <>
-          <Hud
-            hud={hud}
-            mode={settings.mode}
-            sound={settings.sound}
-            showFps={settings.showFps}
-            touch={touch}
-            onPause={() => game.pause()}
-            onCamera={() => game.toggleCamera()}
-            onSound={toggleSound}
-            onIndicator={(s) => game.toggleIndicator(s)}
-          />
-          <TouchControls
-            game={game}
-            gear={hud.gear}
-            touch={touch}
-          />
-          <Toasts toasts={toasts} />
-        </>
+      {game && status === 'playing' && feedback && <Feedback ticket={TICKETS[feedback.ticket]} kind={feedback.kind} mode={mode} />}
+      {game && flash && (status === 'playing' || status === 'crashed') && <CrashFlash key={flash.id} kind={flash.kind} />}
+      {game && status === 'decision' && decision && (
+        <TicketCard
+          ticket={TICKETS[decision.ticket]}
+          index={decision.ticket}
+          total={TICKETS.length}
+          retry={decision.retry}
+          onAnswer={(i) => game.answer(i)}
+        />
+      )}
+      {game && status === 'crashed' && crash && (
+        <CrashCard
+          ticket={TICKETS[crash.ticket]}
+          option={crash.option}
+          kind={crash.kind}
+          mode={mode}
+          onRetry={() => game.retryTicket()}
+          onContinue={() => game.continueAfterCrash()}
+        />
       )}
       {game && status === 'paused' && (
         <PauseMenu
           settings={settings}
           onResume={() => game.resume()}
-          onRestart={() => start(settings.mode)}
+          onRestart={() => start(mode)}
           onCamera={() => game.toggleCamera()}
           onSound={toggleSound}
           onFps={() => update({ showFps: !settings.showFps })}
-          onMenu={() => game.toMenu()}
+          onMenu={toMenu}
         />
       )}
       {game && status === 'finished' && result && (
         <Results
           result={result}
+          tickets={TICKETS}
           progress={progress[result.mode]}
           onRetry={() => start(result.mode)}
-          onSwitchMode={() => start(result.mode === 'training' ? 'check' : 'training')}
-          onMenu={() => game.toMenu()}
+          onSwitchMode={() => start(result.mode === 'training' ? 'exam' : 'training')}
+          onMenu={toMenu}
         />
       )}
       <RotateHint />
