@@ -30,8 +30,7 @@ npm run preview    # перегляд зібраної версії
 У налаштуваннях репозиторію: **Settings → Pages → Build and deployment → Deploy from a branch → `gh-pages` / `(root)`**.
 
 Для автоматичного деплою при кожному пуші в `main` скопіюйте `scripts/github-pages-workflow.yml` у
-`.github/workflows/pages.yml`: workflow проганяє тести, збирає застосунок і публікує `dist/` у `gh-pages` —
-налаштування Pages міняти не треба. Запустити вручну: Actions → Deploy to GitHub Pages → Run workflow.
+`.github/workflows/pages.yml` і оберіть у Settings → Pages джерело **GitHub Actions**.
 
 ## Режими
 
