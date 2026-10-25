@@ -15,6 +15,8 @@ at each situation the world pauses and the player answers a ticket. A wrong answ
   each ticket's actors so they reach their `gap` from the conflict point exactly at the decision moment, and
   times wrong answers so the crash always happens. `snapshot()`/`restore()` replay a situation.
 - `src/scene/` — procedural low-poly city, vehicles, pedestrians, crash effects, decision guides.
+  `vehicleModels.ts` — car bodies (Audi A5 coupé for the ego + sedan/hatch/wagon/SUV/van for traffic), ambulance, bus;
+  `geometry.ts` — `FlatGeometry`: flat-shaded lofts through cross-sections, boxes, quads (one mesh per material).
 - `src/game/Game.ts` — fixed 60 Hz loop, statuses, events for the UI. `src/ui/` — React overlays.
 
 ## Conventions

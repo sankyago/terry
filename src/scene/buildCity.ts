@@ -8,7 +8,11 @@ import type { LightColor, LightState } from '../sim/city';
 import { CROSSWALKS, DRIVEWAYS, GIVE_WAY_LINES, SIGNALS, SIGNS, YARD } from '../sim/city';
 import { forwardOf, rightOf } from '../sim/math';
 import { seededRandom } from '../sim/random';
+import type { V3 } from './geometry';
+import { FlatGeometry } from './geometry';
 import { COLORS, makeMaterial } from './palette';
+import type { CarModel, VehicleParts } from './vehicleModels';
+import { buildCar, TRAFFIC_MODELS } from './vehicleModels';
 
 /** Збирає статичні меші за матеріалом і зливає їх — кілька draw call замість тисяч. */
 class Batcher {
@@ -96,19 +100,45 @@ export function buildCity(scene: Scene, shadows: boolean): CityView {
     roof: m('roof', COLORS.roof),
     roofDark: m('roofDark', COLORS.roofDark),
     window: m('window', COLORS.window, 0.22),
+    frame: m('frame', '#f3f1ea', 0.2),
+    shop: m('shop', '#3f5766', 0.12),
+    plinth: m('plinth', '#8d8f8c', 0.1),
+    gravel: m('gravel', '#9ca3a5', 0.08),
+    tile: m('tile', '#a8524a', 0.12),
+    brick: m('brick', '#b8735a', 0.14),
+    awnings: ['#d8543a', '#2f8f6f', '#3a6fb0', '#e0a43a'].map((c, i) => m(`awning${i}`, c, 0.2)),
+    patch: m('patch', '#50575e', 0.05),
+    manhole: m('manhole', '#3c4247', 0.05),
+    joint: m('joint', '#c3c6c2', 0.08),
+    lamp: m('lamp', '#fff4d0', 0.7),
+    soil: m('soil', '#7d6c5a', 0.06),
     pole: m('pole', COLORS.pole, 0.1),
     signBlue: m('signBlue', COLORS.signBlue, 0.3),
     signRed: m('signRed', COLORS.signRed, 0.3),
     signYellow: m('signYellow', COLORS.signYellow, 0.3),
     signWhite: m('signWhite', COLORS.signWhite, 0.45),
     carParts: {
-      glass: m('pGlass', COLORS.carGlass, 0.05),
+      glass: m('pGlass', COLORS.carGlass, 0.08),
       tyre: m('pTyre', COLORS.tyre, 0.02),
-      bodies: ['#c9d1d6', '#3f4a52', '#9b2f2f', '#2f5f9b', '#e8e2d4', '#55606a', '#6c8f5a'].map((c, i) => m(`pBody${i}`, c, 0.14)),
+      trim: m('pTrim', COLORS.carTrim, 0.04),
+      chrome: m('pChrome', COLORS.rim, 0.25),
+      plate: m('pPlate', '#f1f3f0', 0.35),
+      head: m('pHead', '#e9e4d0', 0.3),
+      tail: m('pTail', '#8e2026', 0.25),
+      ind: m('pInd', '#8a5418', 0.15),
+      bodies: ['#c9d1d6', '#3f4a52', '#9b2f2f', '#2f5f9b', '#e8e2d4', '#55606a', '#6c8f5a', '#1f2326'].map((c, i) => m(`pBody${i}`, c, 0.14)),
     },
   };
   for (const k of ['signBlue', 'signRed', 'signYellow', 'signWhite'] as const) mats[k].backFaceCulling = false;
   const rnd = seededRandom(23);
+  // Деталізовані частини (вікна, кузови, бордюри) — одна сітка на матеріал.
+  const geos = new Map<StandardMaterial, FlatGeometry>();
+  const fg = (mat: StandardMaterial) => {
+    let g = geos.get(mat);
+    if (!g) geos.set(mat, (g = new FlatGeometry()));
+    return g;
+  };
+  const pick = <T,>(arr: readonly T[]) => arr[Math.floor(rnd() * arr.length)];
 
   const flat = (x0: number, z0: number, x1: number, z1: number, y: number, mat: StandardMaterial) => {
     const g = MeshBuilder.CreateGround('flat', { width: x1 - x0, height: z1 - z0 }, scene);
@@ -148,13 +178,7 @@ export function buildCity(scene: Scene, shadows: boolean): CityView {
       const x1 = RX[i + 1] - HW;
       const z0 = RZ[j] + HW;
       const z1 = RZ[j + 1] - HW;
-      box((x0 + x1) / 2, CURB / 2, (z0 + z1) / 2, x1 - x0, CURB, z1 - z0, mats.sidewalk);
-      // Бордюр — світліша смуга по краю тротуару.
-      const t = 0.22;
-      box((x0 + x1) / 2, CURB / 2 + 0.004, z0 + t / 2, x1 - x0, CURB, t, mats.curb);
-      box((x0 + x1) / 2, CURB / 2 + 0.004, z1 - t / 2, x1 - x0, CURB, t, mats.curb);
-      box(x0 + t / 2, CURB / 2 + 0.004, (z0 + z1) / 2, t, CURB, z1 - z0, mats.curb);
-      box(x1 - t / 2, CURB / 2 + 0.004, (z0 + z1) / 2, t, CURB, z1 - z0, mats.curb);
+      sidewalkBlock(x0, z0, x1, z1);
       const ix0 = x0 + SW;
       const ix1 = x1 - SW;
       const iz0 = z0 + SW;
@@ -168,31 +192,127 @@ export function buildCity(scene: Scene, shadows: boolean): CityView {
       }
     }
 
+  type Style = 'panel' | 'office' | 'brick' | 'house';
+
   function building(x0: number, z0: number, x1: number, z1: number, h: number, y: number, force = false) {
     if (!force && blocked(x0, z0, x1, z1)) {
       // Замість будинку — газон із деревом.
       tree((x0 + x1) / 2, (z0 + z1) / 2, y);
       return;
     }
-    const wall = mats.walls[Math.floor(rnd() * mats.walls.length)];
     const w = x1 - x0;
     const d = z1 - z0;
     const cx = (x0 + x1) / 2;
     const cz = (z0 + z1) / 2;
+    const r = rnd();
+    const style: Style = h < 10 && r < 0.45 ? 'house' : r < 0.4 ? 'panel' : r < 0.7 ? 'brick' : 'office';
+    const wall = style === 'brick' ? mats.brick : style === 'office' ? pick([mats.walls[1], mats.walls[3]]) : pick(mats.walls);
+    const top = y + h;
     box(cx, y + h / 2, cz, w, h, d, wall);
-    box(cx, y + h + 0.15, cz, w + 0.3, 0.3, d + 0.3, mats.roof);
-    // Дахові блоки.
-    for (let k = 0; k < 2; k++) {
-      const uw = 1.5 + rnd() * 2.5;
-      box(cx + (rnd() - 0.5) * (w - uw - 1), y + h + 0.6, cz + (rnd() - 0.5) * (d - uw - 1), uw, 0.9, uw, mats.roofDark);
+    // Цоколь.
+    box(cx, y + 0.3, cz, w + 0.08, 0.6, d + 0.08, mats.plinth);
+
+    // Фасади: вікна по поверхах, перший поверх — вітрини з маркізами.
+    const shops = style !== 'house' && h > 8 && rnd() < 0.7;
+    const floorH = style === 'office' ? 3.4 : 3;
+    const groundH = shops ? 4 : floorH;
+    const floors = Math.max(1, Math.floor((h - groundH - 0.6) / floorH) + 1);
+    const faces: Array<{ c: V3; t: V3; n: V3; len: number }> = [
+      { c: [cx, 0, z0], t: [1, 0, 0], n: [0, 0, -1], len: w },
+      { c: [cx, 0, z1], t: [1, 0, 0], n: [0, 0, 1], len: w },
+      { c: [x0, 0, cz], t: [0, 0, 1], n: [-1, 0, 0], len: d },
+      { c: [x1, 0, cz], t: [0, 0, 1], n: [1, 0, 0], len: d },
+    ];
+    const at = (f: (typeof faces)[number], along: number, out: number, yy: number): V3 => [
+      f.c[0] + f.t[0] * along + f.n[0] * out,
+      yy,
+      f.c[2] + f.t[2] * along + f.n[2] * out,
+    ];
+    const scale = (v: V3, k: number): V3 => [v[0] * k, v[1] * k, v[2] * k];
+    const up: V3 = [0, 1, 0];
+    const balconies = style === 'panel' && rnd() < 0.7;
+    for (const f of faces) {
+      const spacing = style === 'office' ? 2.2 : 3;
+      const cols = Math.floor((f.len - 1.6) / spacing);
+      if (cols < 1) continue;
+      const start = -((cols - 1) * spacing) / 2;
+      const ww = style === 'office' ? 1.9 : style === 'house' ? 1.1 : 1.3;
+      const wh = style === 'office' ? 2.3 : 1.5;
+      for (let fl = 0; fl < floors; fl++) {
+        const ground = fl === 0;
+        if (ground && shops) continue;
+        const wy = y + (ground ? 0 : groundH + (fl - 1) * floorH) + (style === 'office' ? 1.7 : 1.75);
+        if (wy + wh / 2 > top - 0.4) continue;
+        for (let k = 0; k < cols; k++) {
+          const a = start + k * spacing;
+          if (style !== 'office') fg(mats.frame).quad(at(f, a, 0.02, wy), scale(f.t, ww / 2 + 0.1), scale(up, wh / 2 + 0.1), f.n);
+          fg(mats.window).quad(at(f, a, 0.035, wy), scale(f.t, ww / 2), scale(up, wh / 2), f.n);
+          if (balconies && !ground && k % 2 === 0 && f.len > 12) {
+            const bc = at(f, a, 0.5, wy - wh / 2 - 0.05);
+            const along = Math.abs(f.t[0]) > 0;
+            fg(wall).box(bc[0], bc[1], bc[2], along ? ww + 0.6 : 1.0, 0.12, along ? 1.0 : ww + 0.6);
+            const rc = at(f, a, 0.96, wy - wh / 2 + 0.3);
+            fg(mats.plinth).box(rc[0], rc[1], rc[2], along ? ww + 0.6 : 0.06, 0.6, along ? 0.06 : ww + 0.6);
+          }
+        }
+      }
+      // Офісні фасади: світлі горизонтальні пояси між поверхами.
+      if (style === 'office')
+        for (let fl = 1; fl < floors + 1; fl++) {
+          const by = y + groundH + (fl - 1) * floorH;
+          if (by > top - 0.5) break;
+          fg(mats.frame).quad(at(f, 0, 0.03, by), scale(f.t, f.len / 2 - 0.4), scale(up, 0.12), f.n);
+        }
+      if (shops) {
+        const awning = pick(mats.awnings);
+        for (let k = 0; k < cols; k += 2) {
+          const a = start + k * spacing + (k + 1 < cols ? spacing / 2 : 0);
+          const sw = k + 1 < cols ? spacing * 2 - 0.8 : spacing - 0.6;
+          fg(mats.frame).quad(at(f, a, 0.02, y + 1.85), scale(f.t, sw / 2 + 0.12), scale(up, 1.3), f.n);
+          fg(mats.shop).quad(at(f, a, 0.035, y + 1.75), scale(f.t, sw / 2), scale(up, 1.1), f.n);
+          if (rnd() < 0.6) {
+            const ac = at(f, a, 0.55, y + 3.25);
+            const along = Math.abs(f.t[0]) > 0;
+            fg(awning).box(ac[0], ac[1], ac[2], along ? sw + 0.2 : 1.1, 0.12, along ? 1.1 : sw + 0.2, 0, 0);
+          }
+        }
+      }
     }
-    // Вікна — смуга на кожен поверх з усіх боків.
-    const floors = Math.max(1, Math.floor((h - 1) / 3));
-    for (let f = 0; f < floors; f++) {
-      const wy = y + 1.8 + f * 3;
-      box(cx, wy, cz, w + 0.04, 1.1, d * 0.84, mats.window);
-      box(cx, wy, cz, w * 0.84, 1.1, d + 0.04, mats.window);
+
+    if (style === 'house') {
+      // Двосхилий дах уздовж довшої сторони, з фронтонами й димарем.
+      const o = 0.45;
+      const alongX = w >= d;
+      const span = (alongX ? d : w) / 2;
+      const ridge = top + Math.min(3.2, span * 0.7);
+      const inside: V3 = [cx, top, cz];
+      const roofM = rnd() < 0.6 ? mats.tile : mats.roofDark;
+      if (alongX) {
+        fg(roofM).poly([[x0 - o, top - 0.3, z0 - o], [x1 + o, top - 0.3, z0 - o], [x1 + o, ridge, cz], [x0 - o, ridge, cz]], inside);
+        fg(roofM).poly([[x0 - o, top - 0.3, z1 + o], [x1 + o, top - 0.3, z1 + o], [x1 + o, ridge, cz], [x0 - o, ridge, cz]], inside);
+        for (const x of [x0, x1]) fg(wall).poly([[x, top, z0], [x, top, z1], [x, ridge, cz]], inside);
+      } else {
+        fg(roofM).poly([[x0 - o, top - 0.3, z0 - o], [x0 - o, top - 0.3, z1 + o], [cx, ridge, z1 + o], [cx, ridge, z0 - o]], inside);
+        fg(roofM).poly([[x1 + o, top - 0.3, z0 - o], [x1 + o, top - 0.3, z1 + o], [cx, ridge, z1 + o], [cx, ridge, z0 - o]], inside);
+        for (const z of [z0, z1]) fg(wall).poly([[x0, top, z], [x1, top, z], [cx, ridge, z]], inside);
+      }
+      box(cx + w * 0.22, ridge - 0.2, cz + d * 0.15, 0.7, 2, 0.7, mats.brick);
+      return;
     }
+    // Плаский дах: гравій, парапет, вентиляційні блоки й вихід на дах.
+    box(cx, top + 0.02, cz, w - 0.1, 0.04, d - 0.1, mats.gravel);
+    const pw = 0.3;
+    const ph = 0.6;
+    const cornice = style === 'brick' ? mats.frame : wall;
+    box(cx, top + ph / 2, z0 + pw / 2, w + 0.1, ph, pw + 0.1, cornice);
+    box(cx, top + ph / 2, z1 - pw / 2, w + 0.1, ph, pw + 0.1, cornice);
+    box(x0 + pw / 2, top + ph / 2, cz, pw + 0.1, ph, d, cornice);
+    box(x1 - pw / 2, top + ph / 2, cz, pw + 0.1, ph, d, cornice);
+    for (let k = 0; k < 2 + Math.floor(rnd() * 2); k++) {
+      const uw = 1.2 + rnd() * 1.8;
+      box(cx + (rnd() - 0.5) * (w - uw - 2), top + 0.5, cz + (rnd() - 0.5) * (d - uw - 2), uw, 0.9, uw * (0.6 + rnd() * 0.6), mats.roofDark);
+    }
+    if (w > 10 && d > 8) box(cx - w * 0.2, top + 1.2, cz + d * 0.15, 2.4, 2.4, 2.4, mats.roof);
   }
 
   /** Будинки по периметру кварталу; біля кутів — нижчі, щоб не закривати перехрестя від камери. */
@@ -269,26 +389,124 @@ export function buildCity(scene: Scene, shadows: boolean): CityView {
   }
 
   function tree(x: number, z: number, y: number, street = false) {
+    const conifer = !street && rnd() < 0.25;
     const h = (street ? 2.4 : 1.8) + rnd() * 0.6;
-    const trunk = MeshBuilder.CreateCylinder('trunk', { diameter: 0.32, height: h, tessellation: 6 }, scene);
+    const trunk = MeshBuilder.CreateCylinder('trunk', { diameterTop: 0.22, diameterBottom: 0.34, height: h, tessellation: 6 }, scene);
     trunk.position.set(x, y + h / 2, z);
     b.add(trunk, mats.trunk);
+    if (conifer) {
+      // Ялина — три яруси конусів.
+      const r = 1.5 + rnd() * 0.6;
+      for (let k = 0; k < 3; k++) {
+        const cone = MeshBuilder.CreateCylinder('cone', { diameterTop: 0, diameterBottom: r * 2 * (1 - k * 0.25), height: 2.2, tessellation: 7 }, scene);
+        cone.position.set(x, y + h + 0.6 + k * 1.25, z);
+        cone.rotation.y = rnd() * Math.PI;
+        b.add(cone, mats.foliage);
+      }
+      return;
+    }
     const r = street ? 1.2 + rnd() * 0.5 : 1.6 + rnd() * 1.1;
-    const crown = MeshBuilder.CreateSphere('crown', { diameter: r * 2, segments: 3 }, scene);
+    const foliage = rnd() > 0.5 ? mats.foliage : mats.foliage2;
+    const crown = MeshBuilder.CreateIcoSphere('crown', { radius: r, subdivisions: 1, flat: true }, scene);
     crown.position.set(x, y + h + r * 0.7, z);
     crown.scaling.y = 0.85;
-    b.add(crown, rnd() > 0.5 ? mats.foliage : mats.foliage2);
+    crown.rotation.y = rnd() * Math.PI;
+    b.add(crown, foliage);
+    // Друга, менша «шапка» — крона стає нерівною.
+    const a = rnd() * Math.PI * 2;
+    const r2 = r * (0.55 + rnd() * 0.2);
+    const top = MeshBuilder.CreateIcoSphere('crown2', { radius: r2, subdivisions: 1, flat: true }, scene);
+    top.position.set(x + Math.sin(a) * r * 0.45, y + h + r * 1.15, z + Math.cos(a) * r * 0.45);
+    b.add(top, foliage);
+  }
+
+
+  /** Припаркований легковик: та сама low-poly модель, що й у руху, але злита зі статикою міста. */
+  function parkedParts(paint: StandardMaterial): VehicleParts {
+    const c = mats.carParts;
+    return {
+      paint,
+      glass: c.glass,
+      trim: c.trim,
+      chrome: c.chrome,
+      plate: c.plate,
+      head: c.head,
+      tail: c.tail,
+      indL: c.ind,
+      indR: c.ind,
+      accent: c.tail,
+      roof: c.plate,
+      sign: c.head,
+      beaconA: c.trim,
+      beaconB: c.trim,
+    };
   }
 
   function parkedCar(x: number, z: number, heading: number, y: number) {
-    const body = mats.carParts.bodies[Math.floor(rnd() * mats.carParts.bodies.length)];
+    const model: CarModel = pick(TRAFFIC_MODELS);
+    const parts = parkedParts(pick(mats.carParts.bodies));
+    // Модель будується в локальних координатах, потім вершини повертаються й зсуваються на місце.
+    const local = new Map<StandardMaterial, FlatGeometry>();
+    const wheels = buildCar(model, (mat) => {
+      let g = local.get(mat);
+      if (!g) local.set(mat, (g = new FlatGeometry()));
+      return g;
+    }, parts);
+    for (const [mat, g] of local) fg(mat).append(g, x, y, z, heading);
     const f = forwardOf(heading);
-    const at = (along: number) => ({ x: x + f.x * along, z: z + f.z * along });
-    const c = at(0);
-    box(c.x, y + 0.48, c.z, 1.8, 0.64, 4.4, body, heading);
-    const cab = at(-0.2);
-    box(cab.x, y + 1.07, cab.z, 1.56, 0.55, 2.3, mats.carParts.glass, heading);
-    box(cab.x, y + 1.36, cab.z, 1.46, 0.05, 1.5, body, heading);
+    const r = rightOf(heading);
+    for (const az of wheels.axles)
+      for (const sx of [-1, 1])
+        fg(mats.carParts.tyre).cylinderX(
+          x + f.x * az + r.x * sx * wheels.track,
+          y + wheels.radius,
+          z + f.z * az + r.z * sx * wheels.track,
+          wheels.radius,
+          wheels.width,
+          10,
+          heading,
+        );
+  }
+
+  /** Тротуар кварталу із заокругленими кутами, бордюром і швами плитки. */
+  function sidewalkBlock(x0: number, z0: number, x1: number, z1: number) {
+    const R = 1.8;
+    const seg = 4;
+    const outline = (inset: number): Array<[number, number]> => {
+      const r = R - inset;
+      const pts: Array<[number, number]> = [];
+      const corners: Array<[number, number, number]> = [
+        [x1 - R, z1 - R, 0],
+        [x1 - R, z0 + R, Math.PI / 2],
+        [x0 + R, z0 + R, Math.PI],
+        [x0 + R, z1 - R, -Math.PI / 2],
+      ];
+      for (const [ccx, ccz, a0] of corners)
+        for (let i = 0; i <= seg; i++) {
+          const a = a0 + (i / seg) * (Math.PI / 2);
+          pts.push([ccx + Math.sin(a) * r, ccz + Math.cos(a) * r]);
+        }
+      return pts;
+    };
+    const outer = outline(0);
+    const inner = outline(0.22);
+    const cx = (x0 + x1) / 2;
+    const cz = (z0 + z1) / 2;
+    const inside: V3 = [cx, 0, cz];
+    fg(mats.sidewalk).poly(inner.map(([x, z]): V3 => [x, CURB, z]), [cx, -1, cz]);
+    const n = outer.length;
+    for (let i = 0; i < n; i++) {
+      const j = (i + 1) % n;
+      const [ax, az] = outer[i];
+      const [bx, bz] = outer[j];
+      fg(mats.curb).poly([[ax, 0, az], [bx, 0, bz], [bx, CURB + 0.02, bz], [ax, CURB + 0.02, az]], inside);
+      fg(mats.curb).poly([[ax, CURB + 0.02, az], [bx, CURB + 0.02, bz], [inner[j][0], CURB + 0.02, inner[j][1]], [inner[i][0], CURB + 0.02, inner[i][1]]], [cx, -1, cz]);
+    }
+    // Шви плитки поперек тротуару.
+    for (let p = x0 + 3; p < x1 - 3; p += 1.6)
+      for (const z of [z0 + 0.22, z1 - 0.22 - SW]) fg(mats.joint).quad([p, CURB + 0.004, z + SW / 2], [0.03, 0, 0], [0, 0, SW / 2], [0, 1, 0]);
+    for (let p = z0 + 3; p < z1 - 3; p += 1.6)
+      for (const x of [x0 + 0.22, x1 - 0.22 - SW]) fg(mats.joint).quad([x + SW / 2, CURB + 0.004, p], [SW / 2, 0, 0], [0, 0, 0.03], [0, 1, 0]);
   }
 
   // ---------- Розмітка ----------
@@ -363,14 +581,62 @@ export function buildCity(scene: Scene, shadows: boolean): CityView {
       const z0 = RZ[j] + HW + 1.7;
       const z1 = RZ[j + 1] - HW - 1.7;
       for (let p = 12; p < x1 - x0 - 10; p += 13) {
-        if (free(x0 + p, z0)) tree(x0 + p, z0, CURB, true);
-        if (free(x0 + p, z1)) tree(x0 + p, z1, CURB, true);
+        if (free(x0 + p, z0)) streetTree(x0 + p, z0);
+        if (free(x0 + p, z1)) streetTree(x0 + p, z1);
       }
       for (let p = 12; p < z1 - z0 - 10; p += 13) {
-        if (free(x0, z0 + p)) tree(x0, z0 + p, CURB, true);
-        if (free(x1, z0 + p)) tree(x1, z0 + p, CURB, true);
+        if (free(x0, z0 + p)) streetTree(x0, z0 + p);
+        if (free(x1, z0 + p)) streetTree(x1, z0 + p);
       }
+      // Ліхтарі — між деревами, біля бордюру, плафоном над дорогою.
+      const ex = RX[i] + HW + 0.5;
+      const ez = RZ[j] + HW + 0.5;
+      for (let p = 18.5; p < x1 - x0 - 10; p += 26) if (free(x0 + p, ez)) streetLamp(x0 + p, ez, 0, -1);
+      for (let p = 18.5; p < z1 - z0 - 10; p += 26) if (free(ex, z0 + p)) streetLamp(ex, z0 + p, -1, 0);
     }
+
+  function streetTree(x: number, z: number) {
+    fg(mats.soil).quad([x, CURB + 0.008, z], [0.65, 0, 0], [0, 0, 0.65], [0, 1, 0]);
+    tree(x, z, CURB, true);
+  }
+
+  function streetLamp(x: number, z: number, dx: number, dz: number) {
+    const h = 6.2;
+    const pole = MeshBuilder.CreateCylinder('lampPole', { diameterTop: 0.1, diameterBottom: 0.16, height: h, tessellation: 6 }, scene);
+    pole.position.set(x, CURB + h / 2, z);
+    b.add(pole, mats.pole);
+    const arm = 1.5;
+    box(x + (dx * arm) / 2, CURB + h - 0.05, z + (dz * arm) / 2, dx ? arm : 0.08, 0.08, dz ? arm : 0.08, mats.pole);
+    box(x + dx * arm, CURB + h - 0.12, z + dz * arm, dx ? 0.7 : 0.32, 0.12, dz ? 0.7 : 0.32, mats.pole);
+    box(x + dx * arm, CURB + h - 0.19, z + dz * arm, dx ? 0.6 : 0.24, 0.03, dz ? 0.6 : 0.24, mats.lamp);
+  }
+
+  // ---------- Латки асфальту й люки ----------
+  const nearSpecial = (x: number, z: number) => CROSSWALKS.some((c) => Math.hypot(c.x - x, c.z - z) < 7);
+  for (const x of RX)
+    for (let j = 0; j < RZ.length - 1; j++)
+      for (let k = 0; k < 3; k++) {
+        const z = RZ[j] + 12 + rnd() * (RZ[j + 1] - RZ[j] - 24);
+        const lx = x + (rnd() < 0.5 ? -1 : 1) * CITY.laneOffset;
+        if (nearSpecial(lx, z)) continue;
+        if (k === 0) roadDisc(lx, z);
+        else flat(lx - 0.5 - rnd() * 0.6, z, lx + 0.5 + rnd() * 0.6, z + 1.5 + rnd() * 3, 0.008, mats.patch);
+      }
+  for (const z of RZ)
+    for (let i = 0; i < RX.length - 1; i++)
+      for (let k = 0; k < 3; k++) {
+        const x = RX[i] + 12 + rnd() * (RX[i + 1] - RX[i] - 24);
+        const lz = z + (rnd() < 0.5 ? -1 : 1) * CITY.laneOffset;
+        if (nearSpecial(x, lz)) continue;
+        if (k === 0) roadDisc(x, lz);
+        else flat(x, lz - 0.5 - rnd() * 0.6, x + 1.5 + rnd() * 3, lz + 0.5 + rnd() * 0.6, 0.008, mats.patch);
+      }
+  function roadDisc(x: number, z: number) {
+    const disc = MeshBuilder.CreateDisc('manhole', { radius: 0.38, tessellation: 10 }, scene);
+    disc.rotation.x = Math.PI / 2;
+    disc.position.set(x, 0.012, z);
+    b.add(disc, mats.manhole);
+  }
 
   // ---------- Дорожні знаки ----------
   for (const s of SIGNS) {
@@ -435,6 +701,8 @@ export function buildCity(scene: Scene, shadows: boolean): CityView {
   lb.flush(new Set(), false);
   const trafficLights = new TrafficLightView(lampMats);
   trafficLights.update(Object.fromEntries(SIGNALS.map((s) => [s.id, s.initial])));
+
+  for (const [mat, g] of geos) if (!g.empty) b.add(g.toMesh('detail', scene), mat);
 
   const receivers = shadows
     ? new Set([mats.grass, mats.grassDark, mats.asphalt, mats.parking, mats.sidewalk, mats.paving, mats.marking])

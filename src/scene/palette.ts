@@ -27,6 +27,7 @@ export const COLORS = {
   signWhite: '#ffffff',
   carBody: '#e4572e',
   carGlass: '#26323a',
+  carTrim: '#22272b',
   tyre: '#24282b',
   rim: '#c9cfd2',
   skin: '#e0b48f',

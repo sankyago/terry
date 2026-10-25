@@ -18,6 +18,7 @@ import { COLORS, MaterialCache } from '../scene/palette';
 import { PedestrianView } from '../scene/PedestrianView';
 import type { QualityProfile } from '../scene/quality';
 import { VehicleView } from '../scene/VehicleView';
+import { pickCarModel } from '../scene/vehicleModels';
 import type { ActorKind } from '../sim/kinds';
 import { KINDS } from '../sim/kinds';
 import type { Pose } from '../sim/math';
@@ -475,7 +476,7 @@ export class Game {
       view =
         a.kind === 'pedestrian'
           ? new PedestrianView(this.scene, this.cache, a.color)
-          : new VehicleView(this.scene, this.cache, a.kind, a.color, true);
+          : new VehicleView(this.scene, this.cache, a.kind, a.color, true, pickCarModel(a.ticket, a.id.slice(a.id.indexOf(':') + 1)));
       this.views.set(a.id, view);
       this.spawnClock.set(a.id, this.clock);
     }
