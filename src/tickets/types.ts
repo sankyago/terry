@@ -29,6 +29,12 @@ export interface ActorSpec {
   child?: boolean;
   /** Незрячий пішохід із білою тростиною. */
   cane?: boolean;
+  /** Їде заднім ходом (виїзд із паркування): модель розвернута проти напрямку руху. */
+  reverse?: boolean;
+  /** Стоїть у точці, де має бути в момент рішення, і рушає лише після відповіді (автобус від зупинки). */
+  departs?: boolean;
+  /** Винуватець ДТП, у якому учень не винен: їде ззаду й не гальмує. */
+  atFault?: boolean;
 }
 
 /** Зміна сигналів світлофора; t — секунди відносно моменту рішення (від'ємні — до нього). */
@@ -49,6 +55,8 @@ export interface Ticket {
   stopLine: Vec2;
   actors: ActorSpec[];
   lights?: LightScript[];
+  /** У цьому білеті в учня, що відповів правильно, в'їжджає ззаду неуважний водій. */
+  innocent?: boolean;
 }
 
 // ---------- Шаблони білетів ----------
@@ -94,6 +102,8 @@ interface TemplateBase {
   signs?: Sign[];
   crosswalks?: LocalCrosswalk[];
   props?: Prop[];
+  /** Велодоріжки й велопереїзди ситуації (ширина за замовчуванням 1,5 м). */
+  bikePaths?: Array<{ a: Vec2; b: Vec2; width?: number }>;
 }
 
 export interface NodeTemplate extends TemplateBase {
@@ -103,6 +113,13 @@ export interface NodeTemplate extends TemplateBase {
   /** Початковий стан світлофора (за замовчуванням зелений для учня). */
   initial?: LocalLights;
   lights?: Array<{ t: number; state: Partial<LocalLights> }>;
+  /**
+   * Перехрестя на проспекті: учень під'їжджає проспектом (lanes смуг у кожен бік) смугою laneIn,
+   * поперечна дорога — звичайна. Після проїзду прямо учень у смузі laneOut (за замовчуванням laneIn).
+   */
+  lanes?: 2 | 3;
+  laneIn?: number;
+  laneOut?: number;
 }
 
 export interface BlockTemplate extends TemplateBase {
@@ -111,9 +128,21 @@ export interface BlockTemplate extends TemplateBase {
   ego?: Corner[];
 }
 
+/**
+ * Ділянка проспекту між перехрестями (lanes смуг у кожен бік, смуги нумеруються від осьової: 0, 1, 2).
+ * Учень заїжджає на ділянку смугою laneIn і покидає смугою laneOut; кути ego — у межах z від −14 до 14.
+ */
+export interface AvenueTemplate extends TemplateBase {
+  site: 'avenue';
+  lanes: 2 | 3;
+  laneIn: number;
+  laneOut: number;
+  ego?: Corner[];
+}
+
 export interface StartTemplate extends TemplateBase {
   site: 'start';
   turn: 'left' | 'right';
 }
 
-export type TicketTemplate = NodeTemplate | BlockTemplate | StartTemplate;
+export type TicketTemplate = NodeTemplate | BlockTemplate | AvenueTemplate | StartTemplate;

@@ -3,9 +3,10 @@ import { SIM_DT } from '../src/config';
 import type { SimEvent } from '../src/sim/sim';
 import { Sim } from '../src/sim/sim';
 import type { RunPlan } from '../src/tickets/plan';
-import { RUN_SIZE, createRunPlan, drawTickets, planFor } from '../src/tickets/plan';
+import { RUN_SIZE, createRunPlan, drawTickets, planFor, withInnocent } from '../src/tickets/plan';
 import { TICKETS } from '../src/tickets/tickets';
 import { seededRandom } from '../src/sim/random';
+import { curvatureAt } from '../src/sim/path';
 
 /** Крутить симуляцію, доки не з'явиться подія потрібного типу (або не мине ліміт часу). */
 function runUntil(sim: Sim, type: SimEvent['type'] | SimEvent['type'][], maxSeconds = 120) {
@@ -48,8 +49,8 @@ function cleanRun(plan: RunPlan) {
 }
 
 describe('банк білетів', () => {
-  it('50 білетів з унікальними id і рівно однією правильною відповіддю', () => {
-    expect(TICKETS.length).toBe(50);
+  it('100 білетів з унікальними id і рівно однією правильною відповіддю', () => {
+    expect(TICKETS.length).toBe(100);
     expect(new Set(TICKETS.map((t) => t.id)).size).toBe(TICKETS.length);
     for (const t of TICKETS) expect(t.options.filter((o) => o.correct).length, t.id).toBe(1);
   });
@@ -73,10 +74,18 @@ describe('генератор маршруту', () => {
     expect(a).not.toBe(b);
   });
 
-  it('спершу видає ще не бачені білети: за 4 заїзди — усі 50', () => {
+  it('спершу видає ще не бачені білети: за 5 заїздів — усі 100', () => {
     const seen = new Set<string>();
-    for (let k = 0; k < 4; k++) for (const id of createRunPlan(100 + k, seen).ids) seen.add(id);
+    for (let k = 0; k < 5; k++) for (const id of createRunPlan(100 + k, seen).ids) seen.add(id);
     expect(seen.size).toBe(TICKETS.length);
+  });
+
+  it('траєкторія учня плавна: без різких зламів і розворотів (перестроювання, повороти)', () => {
+    for (let seed = 1; seed <= 40; seed++) {
+      const sim = new Sim(createRunPlan(seed, new Set(), RUN_SIZE, TICKETS, 0));
+      for (let s = 2; s < sim.egoPath.length - 2; s += 0.5)
+        expect(Math.abs(curvatureAt(sim.egoPath, s, 2)), `заїзд ${seed}, s = ${s}`).toBeLessThan(0.3);
+    }
   });
 
   it('drawTickets не дублює білети', () => {
@@ -85,7 +94,7 @@ describe('генератор маршруту', () => {
   });
 
   for (const seed of [1, 2, 3, 4, 5, 6, 7, 8]) {
-    it(`заїзд ${seed}: усі правильні відповіді — маршрут без ДТП до фінішу`, () => cleanRun(createRunPlan(seed)));
+    it(`заїзд ${seed}: усі правильні відповіді — маршрут без ДТП до фінішу`, () => cleanRun(createRunPlan(seed, new Set(), RUN_SIZE, TICKETS, 0)));
   }
 });
 
@@ -135,7 +144,7 @@ describe('інтерактивні білети', () => {
   });
 
   it('знімок у момент рішення дозволяє переграти ситуацію після ДТП', () => {
-    const plan = createRunPlan(5);
+    const plan = createRunPlan(5, new Set(), RUN_SIZE, TICKETS, 0);
     const sim = reachTicket(plan, 2);
     const snap = sim.snapshot();
     sim.answer(plan.tickets[2].options.findIndex((o) => !o.correct));
@@ -158,4 +167,46 @@ describe('інтерактивні білети', () => {
     expect(sim.state.lights[sig.id][egoAxis]).toBe('green');
     expect(sim.state.lights[sig.id][cross]).toBe('red');
   });
+});
+
+describe('ДТП не з вини учня', () => {
+  TICKETS.filter((t) => t.site !== 'start').forEach((template) => {
+    it(`${template.id}: правильна відповідь — у учня в'їжджають ззаду; після оформлення маршрут триває`, () => {
+      const plan = withInnocent(planFor([template], 3), 0);
+      const sim = reachTicket(plan, 0);
+      const snap = sim.snapshot();
+      expect(sim.answer(sim.correctOption())).toBe(true);
+      const { hit } = runUntil(sim, 'crash', 6);
+      expect(hit?.type).toBe('crash');
+      if (hit?.type === 'crash') expect(hit.crash.innocent).toBe(true);
+      expect(runUntil(sim, 'crashSettled', 5).hit).not.toBeNull();
+      sim.restore(snap);
+      sim.dropAtFault();
+      sim.answer(sim.correctOption());
+      const { hit: end, all } = runUntil(sim, ['decision', 'finished']);
+      expect(all.some((e) => e.type === 'crash')).toBe(false);
+      expect(end?.type).toBe('finished');
+    });
+
+    it(`${template.id}: неправильна відповідь — ДТП з учасником ситуації, а не з водієм ззаду`, () => {
+      const plan = withInnocent(planFor([template], 3), 0);
+      const sim = reachTicket(plan, 0);
+      sim.answer(template.options.findIndex((o) => !o.correct));
+      const { hit } = runUntil(sim, 'crash', 8);
+      expect(hit?.type).toBe('crash');
+      if (hit?.type === 'crash') expect(hit.crash.innocent).toBe(false);
+    });
+  });
+
+  it('у заїзді щонайбільше один такий білет, і не перший', () => {
+    let total = 0;
+    for (let seed = 1; seed <= 120; seed++) {
+      const n = createRunPlan(seed).tickets.filter((t, i) => t.innocent && (expect(i).toBeGreaterThan(0), true)).length;
+      expect(n).toBeLessThanOrEqual(1);
+      total += n;
+    }
+    // ≈ 1 − 0,95^19 ≈ 62 % заїздів.
+    expect(total).toBeGreaterThan(50);
+    expect(total).toBeLessThan(100);
+  }, 60000);
 });

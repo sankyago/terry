@@ -1,6 +1,7 @@
 import type { ModeProgress, RunResult } from '../storage/storage';
 import { EXAM_MAX_MISTAKES } from '../storage/storage';
 import type { Ticket } from '../tickets/types';
+import { ACCIDENT_STEPS } from '../tickets/procedure';
 import { formatTime } from './format';
 import { CheckIcon, CrossIcon, RestartIcon } from './icons';
 
@@ -82,6 +83,42 @@ export function Results({ result, tickets, progress, onRetry, onSwitchMode, onMe
             );
           })}
         </ul>
+
+        {result.procedure?.length > 0 && (
+          <>
+            <h3 className="section-title">ДТП не з вашої вини: дії на місці пригоди</h3>
+            <ul className="ticket-list">
+              {result.procedure.map((a) => {
+                const step = ACCIDENT_STEPS.find((s) => s.id === a.step);
+                if (!step) return null;
+                const right = step.options.find((o) => o.correct)!;
+                return (
+                  <li key={a.step} className={a.correct ? 'ok' : 'fail'}>
+                    <div className="ticket-row">
+                      <span className="mark">{a.correct ? <CheckIcon width={16} height={16} /> : <CrossIcon width={16} height={16} />}</span>
+                      <b>{step.title}</b>
+                    </div>
+                    {!a.correct && (
+                      <div className="ticket-detail">
+                        <span>
+                          <span className="muted">Ви: </span>
+                          {step.options[a.option].text}
+                        </span>
+                        <span>
+                          <span className="muted">Правильно: </span>
+                          {right.text}
+                        </span>
+                        <span className="muted tiny">
+                          {step.explanation} <span className="rule">{step.rule}</span>
+                        </span>
+                      </div>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          </>
+        )}
 
         <div className="actions">
           <button className="primary big" onClick={onRetry} autoFocus>

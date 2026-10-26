@@ -16,21 +16,27 @@ import { Effects } from '../scene/Effects';
 import { Guides } from '../scene/Guides';
 import { COLORS, MaterialCache } from '../scene/palette';
 import { PedestrianView } from '../scene/PedestrianView';
+import { CyclistView } from '../scene/CyclistView';
+import { MeshBuilder } from '@babylonjs/core/Meshes/meshBuilder';
+import { Mesh } from '@babylonjs/core/Meshes/mesh';
 import type { QualityProfile } from '../scene/quality';
 import { VehicleView } from '../scene/VehicleView';
 import { pickCarModel } from '../scene/vehicleModels';
 import type { ActorKind } from '../sim/kinds';
-import { KINDS } from '../sim/kinds';
+import { KINDS, isVulnerable } from '../sim/kinds';
 import type { Pose } from '../sim/math';
 import { lerp, lerpAngle, msToKmh } from '../sim/math';
-import { curvatureAt } from '../sim/path';
+import { curvatureAt, poseOnPath } from '../sim/path';
 import type { ActorState, IndicatorState } from '../sim/sim';
 import { Sim } from '../sim/sim';
 import type { RunPlan } from '../tickets/plan';
-import type { AnswerRecord, CameraMode, Mode, RunResult } from '../storage/storage';
+import type { AnswerRecord, CameraMode, Mode, ProcedureRecord, RunResult } from '../storage/storage';
+import { ACCIDENT_STEPS } from '../tickets/procedure';
+import { makeMaterial } from '../scene/palette';
 import { buildResult } from '../storage/storage';
 
-export type GameStatus = 'menu' | 'playing' | 'decision' | 'crashed' | 'paused' | 'finished';
+/** procedure — після ДТП не з вини учня: покрокові білети про дії на місці пригоди. */
+export type GameStatus = 'menu' | 'playing' | 'decision' | 'crashed' | 'procedure' | 'paused' | 'finished';
 export type TicketMark = 'ok' | 'fail' | null;
 
 export interface HudSnapshot {
@@ -46,7 +52,10 @@ export type GameEvent =
   | { type: 'status'; status: GameStatus }
   | { type: 'decision'; ticket: number; retry: boolean }
   | { type: 'answer'; ticket: number; option: number; correct: boolean; retry: boolean }
-  | { type: 'crash'; ticket: number; kind: ActorKind }
+  | { type: 'crash'; ticket: number; kind: ActorKind; innocent: boolean }
+  | { type: 'procedure'; step: number }
+  | { type: 'procedureAnswer'; step: number; option: number; correct: boolean }
+  | { type: 'procedureDone'; ticket: number }
   | { type: 'replay'; ticket: number }
   | { type: 'cleared'; ticket: number }
   | { type: 'finished'; result: RunResult }
@@ -66,7 +75,9 @@ const HUD_INTERVAL = 0.1;
 const PED_SCALE = 1.25;
 /** На скільки метрів на початку й наприкінці траєкторії учасник з'являється і зникає. */
 const FADE = 8;
-type ActorView = VehicleView | PedestrianView;
+type ActorView = VehicleView | PedestrianView | CyclistView;
+/** Скільки метрів позаду авто ставлять знак аварійної зупинки в місті. */
+const TRIANGLE_DIST = 20;
 
 export class Game {
   sim: Sim;
@@ -92,6 +103,9 @@ export class Game {
   private answers: AnswerRecord[] = [];
   private snapshotAtDecision: ReturnType<Sim['snapshot']> | null = null;
   private retrying = false;
+  private procedureStep = -1;
+  private procedureAnswers: ProcedureRecord[] = [];
+  private triangle: Mesh | null = null;
   private pausedFrom: GameStatus = 'playing';
   private cameraMode: CameraMode;
   private accumulator = 0;
@@ -158,6 +172,11 @@ export class Game {
       if (this.status === 'decision' && n >= 1 && n <= 4) {
         const t = this.sim.currentTicket?.ticket;
         if (t && n <= t.options.length) this.answer(n - 1);
+      } else if (this.status === 'procedure' && n >= 1 && n <= 4 && !this.procedureAnswered) {
+        if (n <= ACCIDENT_STEPS[this.procedureStep].options.length) this.answerProcedure(n - 1);
+      } else if ((e.key === 'Enter' || e.key === ' ') && this.status === 'procedure' && this.procedureAnswered) {
+        e.preventDefault();
+        this.nextProcedureStep();
       } else if (e.key === 'Escape') {
         if (this.status === 'paused') this.resume();
         else this.pause();
@@ -208,7 +227,7 @@ export class Game {
   private setStatus(s: GameStatus) {
     if (this.status === s) return;
     this.status = s;
-    this.audio.setActive(s === 'playing' || s === 'crashed');
+    this.audio.setActive(s === 'playing' || s === 'crashed' || s === 'procedure');
     this.emit({ type: 'status', status: s });
   }
 
@@ -237,6 +256,9 @@ export class Game {
   private resetRun() {
     this.sim.reset();
     this.answers = [];
+    this.procedureStep = -1;
+    this.procedureAnswers = [];
+    this.removeTriangle();
     this.snapshotAtDecision = null;
     this.retrying = false;
     this.accumulator = 0;
@@ -268,7 +290,7 @@ export class Game {
   }
 
   pause() {
-    if (this.status !== 'playing' && this.status !== 'decision' && this.status !== 'crashed') return;
+    if (this.status !== 'playing' && this.status !== 'decision' && this.status !== 'crashed' && this.status !== 'procedure') return;
     this.pausedFrom = this.status;
     this.audio.suspend();
     this.setStatus('paused');
@@ -330,6 +352,73 @@ export class Game {
     this.emit({ type: 'replay', ticket: this.sim.state.ticket });
   }
 
+  // ---------- Оформлення ДТП не з вини учня ----------
+
+  /** Чи на поточний крок оформлення вже відповіли (тоді чекаємо «Далі»). */
+  get procedureAnswered() {
+    return this.procedureStep >= 0 && this.procedureAnswers.some((a) => a.step === ACCIDENT_STEPS[this.procedureStep].id);
+  }
+
+  private startProcedure() {
+    this.procedureStep = 0;
+    this.procedureAnswers = this.procedureAnswers.filter((a) => !ACCIDENT_STEPS.some((s) => s.id === a.step));
+    this.setStatus('procedure');
+    this.emit({ type: 'procedure', step: 0 });
+  }
+
+  /** Відповідь на крок оформлення. Зараховується, як і білети маршруту. */
+  answerProcedure(option: number) {
+    if (this.status !== 'procedure' || this.procedureAnswered) return;
+    const step = ACCIDENT_STEPS[this.procedureStep];
+    const correct = step.options[option]?.correct ?? false;
+    this.procedureAnswers.push({ step: step.id, option, correct });
+    if (correct) this.audio.success();
+    else this.audio.fail();
+    // Знак аварійної зупинки з'являється на дорозі після кроку про нього (правильно — чи після пояснення).
+    if (step.scene === 'triangle') this.placeTriangle();
+    this.emit({ type: 'procedureAnswer', step: this.procedureStep, option, correct });
+  }
+
+  nextProcedureStep() {
+    if (this.status !== 'procedure' || !this.procedureAnswered) return;
+    this.procedureStep++;
+    if (this.procedureStep < ACCIDENT_STEPS.length) {
+      this.emit({ type: 'procedure', step: this.procedureStep });
+      return;
+    }
+    // ДТП оформлено: продовжуємо маршрут із моменту рішення, уже без неуважного водія.
+    const ticket = this.sim.state.ticket;
+    this.procedureStep = -1;
+    this.removeTriangle();
+    this.restoreDecision();
+    this.sim.dropAtFault();
+    this.sim.answer(this.sim.correctOption());
+    this.retrying = false;
+    this.setStatus('playing');
+    this.emit({ type: 'procedureDone', ticket });
+  }
+
+  private placeTriangle() {
+    if (this.triangle) return;
+    const e = this.sim.state.ego;
+    const p = poseOnPath(this.sim.egoPath, e.s - TRIANGLE_DIST);
+    const tri = MeshBuilder.CreateDisc('triangleSign', { radius: 0.45, tessellation: 3, sideOrientation: Mesh.DOUBLESIDE }, this.scene);
+    const mat = makeMaterial(this.scene, 'triangleSign', '#e0242c', 0.6);
+    mat.backFaceCulling = false;
+    tri.material = mat;
+    tri.isPickable = false;
+    tri.rotation.set(0, p.heading + Math.PI, Math.PI / 2);
+    tri.position.set(p.x, 0.36, p.z);
+    this.triangle = tri;
+  }
+
+  private removeTriangle() {
+    if (!this.triangle) return;
+    this.triangle.material?.dispose();
+    this.triangle.dispose();
+    this.triangle = null;
+  }
+
   private restoreDecision() {
     this.sim.restore(this.snapshotAtDecision!);
     this.effects.clear();
@@ -342,7 +431,7 @@ export class Game {
   private frame() {
     if (this.disposed) return;
     const dt = Math.min(0.1, this.engine.getDeltaTime() / 1000);
-    const running = this.status === 'playing' || this.status === 'crashed';
+    const running = this.status === 'playing' || this.status === 'crashed' || this.status === 'procedure';
     if (running) {
       this.clock += dt;
       this.accumulator += dt;
@@ -362,7 +451,7 @@ export class Game {
       this.clock += dt;
       if (this.status === 'menu') this.ambient.update(dt);
     }
-    const alpha = this.status === 'playing' || this.status === 'crashed' ? this.accumulator / SIM_DT : 1;
+    const alpha = running ? this.accumulator / SIM_DT : 1;
     this.render(dt, alpha);
 
     const e = this.sim.state.ego;
@@ -389,22 +478,23 @@ export class Game {
           this.emit({ type: 'decision', ticket: ev.ticket, retry: false });
           break;
         case 'crash': {
-          const ped = ev.crash.kind === 'pedestrian';
+          const ped = isVulnerable(ev.crash.kind);
           this.effects.burst(ev.crash.x, ev.crash.z, ev.crash.strength, ped);
           this.rig.kick(ped ? 0.6 : Math.min(2.2, 0.8 + ev.crash.strength * 0.1));
           this.audio.crash(ev.crash.strength, ped);
-          this.emit({ type: 'crash', ticket: ev.crash.ticket, kind: ev.crash.kind });
+          this.emit({ type: 'crash', ticket: ev.crash.ticket, kind: ev.crash.kind, innocent: ev.crash.innocent });
           break;
         }
         case 'crashSettled':
-          this.setStatus('crashed');
+          if (this.sim.state.crash?.innocent) this.startProcedure();
+          else this.setStatus('crashed');
           break;
         case 'ticketCleared':
           this.retrying = false;
           this.emit({ type: 'cleared', ticket: ev.ticket });
           break;
         case 'finished': {
-          const result = buildResult(this.mode, this.answers, this.sim.tickets.length, this.sim.state.time, this.plan.ids);
+          const result = buildResult(this.mode, this.answers, this.sim.tickets.length, this.sim.state.time, this.plan.ids, this.procedureAnswers);
           this.audio.setActive(false);
           if (result.passed) this.audio.success();
           else this.audio.fail();
@@ -421,9 +511,9 @@ export class Game {
     if (!t) return;
     const st = this.sim.state;
     const actors = st.actors
-      .filter((a) => a.ticket === st.ticket && a.alive && !a.parked)
+      .filter((a) => a.ticket === st.ticket && a.alive && !a.parked && !a.atFault)
       .map((a) => ({ x: a.x, z: a.z, heading: a.heading, size: a.kind === 'pedestrian' ? 2.6 : KINDS[a.kind].length + 1.4 }));
-    const toS = Math.max(...t.actors.filter((a) => !a.spec.parked).map((a) => a.egoConflictS)) + 6;
+    const toS = Math.max(...t.actors.filter((a) => !a.spec.parked && !a.spec.atFault).map((a) => a.egoConflictS)) + 6;
     this.guides.show(this.sim.egoPath, st.ego.s, toS, actors);
   }
 
@@ -488,7 +578,7 @@ export class Game {
     const w = this.engine.getRenderWidth();
     const h = this.engine.getRenderHeight();
     this.rig.aspect = w / Math.max(1, h);
-    const card = this.status === 'decision' || this.status === 'crashed';
+    const card = this.status === 'decision' || this.status === 'crashed' || this.status === 'procedure';
     const wide = (this.scene.getEngine().getRenderingCanvas()?.clientWidth ?? 0) > 640;
     this.rig.update(egoPose, dt, {
       focus: this.focus(),
@@ -511,7 +601,9 @@ export class Game {
       view =
         a.kind === 'pedestrian'
           ? new PedestrianView(this.scene, this.cache, a.color, undefined, a.cane)
-          : new VehicleView(this.scene, this.cache, a.kind, a.color, true, spec?.model ?? pickCarModel(a.ticket, specId));
+          : a.kind === 'cyclist'
+            ? new CyclistView(this.scene, this.cache, a.color)
+            : new VehicleView(this.scene, this.cache, a.kind, a.color, true, spec?.model ?? pickCarModel(a.ticket, specId));
       this.views.set(a.id, view);
       this.spawnClock.set(a.id, this.clock);
     }
@@ -524,13 +616,16 @@ export class Game {
     if (view instanceof PedestrianView) {
       const fall = a.body ? Math.min(1, a.hitTime / 0.45) : 0;
       view.update(pose, a.s, a.v > 0 && !a.body, fall, (a.child ? 0.72 : 1) * PED_SCALE);
+    } else if (view instanceof CyclistView) {
+      const fall = a.body ? Math.min(1, a.hitTime / 0.5) : 0;
+      view.update(pose, a.s, a.v > 0 && !a.body, fall, (a.child ? 0.8 : 1) * 1.15);
     } else {
       const r = a.kind === 'bus' ? 0.5 : 0.33;
       view.update(pose, {
         steerAngle: 0,
         wheelSpin: a.s / r,
         braking: !!a.body || (a.parked && !a.hazard),
-        indicator: a.body || a.hazard ? 'hazard' : a.parked ? 'none' : this.turnSignal(path, a.s),
+        indicator: a.body || a.hazard ? 'hazard' : a.parked || a.reverse ? 'none' : this.turnSignal(path, a.s),
         clock: this.clock,
         siren: a.siren,
         bounce: 0,
@@ -552,7 +647,7 @@ export class Game {
     const st = this.sim.state;
     const t = this.sim.currentTicket;
     if (!t || st.phase === 'driving' || st.phase === 'finished') return null;
-    const main = t.actors.find((a) => !a.spec.parked) ?? t.actors[0];
+    const main = t.actors.find((a) => !a.spec.parked && !a.spec.atFault) ?? t.actors[0];
     const p = st.crash ? { x: st.crash.x, z: st.crash.z } : main.conflict;
     return { point: p, weight: st.crash ? 0.6 : 0.45, dist: st.crash ? 40 : 48 };
   }

@@ -6,14 +6,15 @@ import { resolveQuality } from '../scene/quality';
 import type { Mode, Progress, RunResult, Settings } from '../storage/storage';
 import { load, markSeen, recordResult, save } from '../storage/storage';
 import type { RunPlan } from '../tickets/plan';
-import { createRunPlan, planForIds } from '../tickets/plan';
+import { createRunPlan, planForIds, withInnocent } from '../tickets/plan';
+import { ACCIDENT_STEPS } from '../tickets/procedure';
 import { TICKETS } from '../tickets/tickets';
 import { Hud } from './Hud';
 import { PauseMenu } from './PauseMenu';
 import { Results } from './Results';
 import { RotateHint } from './RotateHint';
 import { StartScreen } from './StartScreen';
-import { CrashCard, CrashFlash, Feedback, TicketCard } from './TicketCard';
+import { CrashCard, CrashFlash, Feedback, ProcedureCard, TicketCard } from './TicketCard';
 
 const params = new URLSearchParams(location.search);
 const DEBUG = params.has('debug');
@@ -25,8 +26,9 @@ const DEBUG = params.has('debug');
 function nextPlan(seen: string[]): RunPlan {
   const seed = DEBUG && params.has('seed') ? Number(params.get('seed')) : Math.floor(Math.random() * 1e9);
   const ids = DEBUG ? params.get('tickets') : null;
-  if (ids) return planForIds(ids.split(','), seed);
-  return createRunPlan(seed, new Set(seen));
+  const plan = ids ? planForIds(ids.split(','), seed) : createRunPlan(seed, new Set(seen));
+  // ?innocent=N — у білеті N (з нуля) учня гарантовано вдарять ззаду.
+  return DEBUG && params.has('innocent') ? withInnocent(plan, Number(params.get('innocent'))) : plan;
 }
 
 interface Decision {
@@ -35,7 +37,11 @@ interface Decision {
 }
 interface FeedbackState {
   ticket: number;
-  kind: 'correct' | 'replay';
+  kind: 'correct' | 'replay' | 'procedureDone';
+}
+interface ProcedureState {
+  step: number;
+  chosen: number | null;
 }
 interface CrashState {
   ticket: number;
@@ -52,7 +58,8 @@ export function App() {
   const [decision, setDecision] = useState<Decision | null>(null);
   const [feedback, setFeedback] = useState<FeedbackState | null>(null);
   const [crash, setCrash] = useState<CrashState | null>(null);
-  const [flash, setFlash] = useState<{ kind: ActorKind; id: number } | null>(null);
+  const [flash, setFlash] = useState<{ kind: ActorKind; innocent: boolean; id: number } | null>(null);
+  const [procedure, setProcedure] = useState<ProcedureState | null>(null);
   const [result, setResult] = useState<RunResult | null>(null);
   const [game, setGame] = useState<Game | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -105,8 +112,19 @@ export function App() {
           if (e.correct) setFeedback({ ticket: e.ticket, kind: 'correct' });
           break;
         case 'crash':
-          setFlash({ kind: e.kind, id: Date.now() });
+          setFlash({ kind: e.kind, innocent: e.innocent, id: Date.now() });
           setCrash({ ticket: e.ticket, kind: e.kind, option: g.lastAnswer });
+          break;
+        case 'procedure':
+          setProcedure({ step: e.step, chosen: null });
+          break;
+        case 'procedureAnswer':
+          setProcedure({ step: e.step, chosen: e.option });
+          break;
+        case 'procedureDone':
+          setProcedure(null);
+          setCrash(null);
+          setFeedback({ ticket: e.ticket, kind: 'procedureDone' });
           break;
         case 'replay':
           setCrash(null);
@@ -151,6 +169,7 @@ export function App() {
     setFeedback(null);
     setCrash(null);
     setFlash(null);
+    setProcedure(null);
     game?.setMuted(!settings.sound);
     game?.setCameraMode(settings.camera);
     if (!game) return;
@@ -168,12 +187,13 @@ export function App() {
 
   const toMenu = () => {
     setDecision(null);
+    setProcedure(null);
     setFeedback(null);
     setCrash(null);
     game?.toMenu();
   };
 
-  const inRun = status === 'playing' || status === 'decision' || status === 'crashed' || status === 'paused';
+  const inRun = status === 'playing' || status === 'decision' || status === 'crashed' || status === 'procedure' || status === 'paused';
   const mode = settings.mode;
 
   return (
@@ -201,7 +221,21 @@ export function App() {
         />
       )}
       {game && status === 'playing' && feedback && <Feedback ticket={game.tickets[feedback.ticket]} kind={feedback.kind} mode={mode} />}
-      {game && flash && (status === 'playing' || status === 'crashed') && <CrashFlash key={flash.id} kind={flash.kind} />}
+      {game && flash && (status === 'playing' || status === 'crashed' || status === 'procedure') && (
+        <CrashFlash key={flash.id} kind={flash.kind} innocent={flash.innocent} />
+      )}
+      {game && status === 'procedure' && procedure && (
+        <ProcedureCard
+          key={procedure.step}
+          step={ACCIDENT_STEPS[procedure.step]}
+          index={procedure.step}
+          total={ACCIDENT_STEPS.length}
+          chosen={procedure.chosen}
+          mode={mode}
+          onAnswer={(i) => game.answerProcedure(i)}
+          onNext={() => game.nextProcedureStep()}
+        />
+      )}
       {game && status === 'decision' && decision && (
         <TicketCard
           ticket={game.tickets[decision.ticket]}

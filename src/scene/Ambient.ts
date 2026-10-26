@@ -1,6 +1,7 @@
 import type { Scene } from '@babylonjs/core/scene';
 import { CITY } from '../config';
 import type { WorldFeatures } from '../sim/city';
+import { halfAtX, halfAtZ } from '../sim/city';
 import type { Vec2 } from '../sim/math';
 import { headingOf, lerpAngle } from '../sim/math';
 import { seededRandom } from '../sim/random';
@@ -12,14 +13,14 @@ const RZ = CITY.roadsZ;
 
 /** Відрізки тротуарів уздовж маршруту, але далеко від ситуацій — тут гуляють перехожі. */
 function walks(world: WorldFeatures, route: Vec2[], rnd: () => number, count: number): Array<[Vec2, Vec2]> {
-  const d = CITY.roadHalfWidth + CITY.sidewalk / 2;
+  const d = CITY.sidewalk / 2;
   const all: Array<[Vec2, Vec2]> = [];
   for (let i = 0; i < RX.length - 1; i++)
     for (let j = 0; j < RZ.length - 1; j++) {
-      const x0 = RX[i] + d;
-      const x1 = RX[i + 1] - d;
-      const z0 = RZ[j] + d;
-      const z1 = RZ[j + 1] - d;
+      const x0 = RX[i] + halfAtX(RX[i]) + d;
+      const x1 = RX[i + 1] - halfAtX(RX[i + 1]) - d;
+      const z0 = RZ[j] + halfAtZ(RZ[j]) + d;
+      const z1 = RZ[j + 1] - halfAtZ(RZ[j + 1]) - d;
       all.push(
         [{ x: x0 + 10, z: z0 }, { x: x1 - 10, z: z0 }],
         [{ x: x0 + 10, z: z1 }, { x: x1 - 10, z: z1 }],

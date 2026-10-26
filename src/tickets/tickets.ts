@@ -1,30 +1,16 @@
 import { CAR } from '../config';
-import { CW, O, blockCrosswalk, drive, prop, walk } from './local';
-import type { TicketOption, TicketTemplate } from './types';
+import { CW, GREEN_JUST_NOW, O, STOP, STOP_RIGHT, STOP_SIGNAL, ask, blockCrosswalk, drive, prop, walk } from './local';
+import { AVENUE } from './avenue';
+import { CYCLISTS } from './cyclists';
+import { MORE } from './more';
+import type { TicketTemplate } from './types';
 
 export type { ActorSpec, LightScript, Ticket, TicketOption, TicketTemplate } from './types';
-
-/** Варіанти відповіді; correct — індекс правильного. */
-const ask = (texts: string[], correct: number): TicketOption[] => texts.map((text, i) => ({ text, correct: i === correct }));
 
 // Усі координати — локальні (див. types.ts): учень їде з півдня на північ, праворуч — +X.
 // Перехрестя: центр у (0, 0), стоп-лінія перед ним — z ≈ −4,4 (світлофор — −8).
 // Квартал: середина в (0, 0), сусідні перехрестя — z = ±45.
 // Виїзд із двору: вісь виїзду x = 0, дорога вздовж X; після повороту праворуч — смуга z = −1,75.
-
-const STOP = { x: O, z: -4.4 };
-const STOP_RIGHT = { x: O, z: -6.3 };
-const STOP_SIGNAL = { x: O, z: -8 };
-
-/** Сигнали для «зеленого щойно ввімкнувся»: поперечна дорога завершує фазу. */
-const GREEN_JUST_NOW = {
-  initial: { along: 'red', cross: 'green' } as const,
-  lights: [
-    { t: -3, state: { cross: 'yellow' } as const },
-    { t: -1.2, state: { cross: 'red', along: 'redYellow' } as const },
-    { t: 0, state: { along: 'green' } as const },
-  ],
-};
 
 // ---------- Виїзд із двору (лише першим у маршруті) ----------
 
@@ -1147,7 +1133,7 @@ const BLOCK: TicketTemplate[] = [
 ];
 
 /** Усі білети. Генератор маршруту обирає з них і розставляє містом. */
-export const TICKETS: TicketTemplate[] = [...START, ...EQUAL, ...PRIORITY, ...SIGNAL, ...BLOCK];
+export const TICKETS: TicketTemplate[] = [...START, ...EQUAL, ...PRIORITY, ...SIGNAL, ...BLOCK, ...CYCLISTS, ...MORE, ...AVENUE];
 
 /** Центр авто, коли передній бампер на лінії — використовується в тестах і для камери. */
 export const EGO_HALF_LENGTH = CAR.length / 2;

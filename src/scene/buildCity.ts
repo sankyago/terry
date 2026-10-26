@@ -5,7 +5,7 @@ import { MeshBuilder } from '@babylonjs/core/Meshes/meshBuilder';
 import type { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial';
 import { CITY } from '../config';
 import type { LightColor, LightState, WorldFeatures } from '../sim/city';
-import { DRIVEWAYS, YARD } from '../sim/city';
+import { DRIVEWAYS, YARD, halfAtX, halfAtZ, lanesAtX, lanesAtZ, onRoad } from '../sim/city';
 import { forwardOf, rightOf } from '../sim/math';
 import { seededRandom } from '../sim/random';
 import type { V3 } from './geometry';
@@ -130,6 +130,7 @@ export function buildCity(scene: Scene, shadows: boolean, world: WorldFeatures):
     signWhite: m('signWhite', COLORS.signWhite, 0.45),
     signBlack: m('signBlack', '#1d2125', 0.1),
     coneOrange: m('coneOrange', '#f07a1a', 0.3),
+    bike: m('bike', '#a8574a', 0.1),
     carParts: {
       glass: m('pGlass', COLORS.carGlass, 0.08),
       tyre: m('pTyre', COLORS.tyre, 0.02),
@@ -180,10 +181,10 @@ export function buildCity(scene: Scene, shadows: boolean, world: WorldFeatures):
   const isPark = (i: number, j: number) => RX[i] === 90 && RZ[j] === 90;
   for (let i = 0; i < RX.length - 1; i++)
     for (let j = 0; j < RZ.length - 1; j++) {
-      const x0 = RX[i] + HW;
-      const x1 = RX[i + 1] - HW;
-      const z0 = RZ[j] + HW;
-      const z1 = RZ[j + 1] - HW;
+      const x0 = RX[i] + halfAtX(RX[i]);
+      const x1 = RX[i + 1] - halfAtX(RX[i + 1]);
+      const z0 = RZ[j] + halfAtZ(RZ[j]);
+      const z1 = RZ[j + 1] - halfAtZ(RZ[j + 1]);
       sidewalkBlock(x0, z0, x1, z1);
       const ix0 = x0 + SW;
       const ix1 = x1 - SW;
@@ -518,8 +519,8 @@ export function buildCity(scene: Scene, shadows: boolean, world: WorldFeatures):
   // ---------- Розмітка ----------
   /** Біля перехресть із зебрами осьова лінія закінчується раніше. */
   const isSignal = (x: number, z: number) => world.wideNodes.some((s) => s.x === x && s.z === z);
-  const dash = (cx: number, cz: number, len: number, alongX: boolean, w = 0.14) =>
-    box(cx, MARK_Y, cz, alongX ? len : w, 0.01, alongX ? w : len, mats.marking);
+  const dash = (cx: number, cz: number, len: number, alongX: boolean, w = 0.14, mat = mats.marking) =>
+    box(cx, MARK_Y, cz, alongX ? len : w, 0.01, alongX ? w : len, mat);
   /** Осьова між перехрестями: суцільна біля перехресть, далі пунктир. */
   const centerLine = (fixed: number, from: number, to: number, alongX: boolean) => {
     const solid = 12;
@@ -528,33 +529,95 @@ export function buildCity(scene: Scene, shadows: boolean, world: WorldFeatures):
     at(to - solid / 2, solid);
     for (let p = from + solid + 3; p + 3 < to - solid; p += 9) at(p + 1.5, 3);
   };
+  /** Проспект: подвійна суцільна осьова, пунктир між смугами, суцільна край-лінія й велосмуга біля бордюру. */
+  const avenueLines = (fixed: number, from: number, to: number, alongX: boolean, lanes: number) => {
+    const line = (off: number, a: number, b: number, w = 0.14, mat = mats.marking) =>
+      alongX ? dash((a + b) / 2, fixed + off, b - a, true, w, mat) : dash(fixed + off, (a + b) / 2, b - a, false, w, mat);
+    for (const sgn of [-1, 1]) {
+      line(sgn * 0.14, from, to);
+      for (let i = 1; i < lanes; i++) {
+        const off = sgn * i * CITY.laneWidth;
+        line(off, from, from + 10);
+        line(off, to - 10, to);
+        for (let p = from + 13; p + 3 < to - 10; p += 9) line(off, p, p + 3);
+      }
+      const edge = lanes * CITY.laneWidth;
+      line(sgn * edge, from, to);
+      line(sgn * (edge + CITY.bikeLane / 2 + 0.07), from, to, CITY.bikeLane - 0.14, mats.bike);
+      // Велосипед на велосмузі через кожні ~25 м.
+      for (let p = from + 8; p < to - 6; p += 25) bikeGlyph(alongX ? p : fixed + sgn * (edge + CITY.bikeLane / 2), alongX ? fixed + sgn * (edge + CITY.bikeLane / 2) : p, alongX);
+    }
+  };
+  function bikeGlyph(x: number, z: number, alongX: boolean) {
+    for (const k of [-0.42, 0.42]) {
+      const w = MeshBuilder.CreateDisc('bikeWheel', { radius: 0.24, tessellation: 10 }, scene);
+      w.rotation.x = Math.PI / 2;
+      w.position.set(x + (alongX ? k : 0), MARK_Y + 0.006, z + (alongX ? 0 : k));
+      b.add(w, mats.marking);
+    }
+    box(x, MARK_Y + 0.004, z, alongX ? 0.9 : 0.08, 0.01, alongX ? 0.08 : 0.9, mats.marking);
+  }
   for (const x of RX)
     for (let j = 0; j < RZ.length - 1; j++) {
-      const gapA = isSignal(x, RZ[j]) ? 8 : HW + 0.5;
-      const gapB = isSignal(x, RZ[j + 1]) ? 8 : HW + 0.5;
-      centerLine(x, RZ[j] + gapA, RZ[j + 1] - gapB, false);
+      const gapA = halfAtZ(RZ[j]) + (isSignal(x, RZ[j]) ? 4.5 : 0.5);
+      const gapB = halfAtZ(RZ[j + 1]) + (isSignal(x, RZ[j + 1]) ? 4.5 : 0.5);
+      const lanes = lanesAtX(x);
+      if (lanes > 1) avenueLines(x, RZ[j] + gapA, RZ[j + 1] - gapB, false, lanes);
+      else centerLine(x, RZ[j] + gapA, RZ[j + 1] - gapB, false);
     }
   for (const z of RZ)
     for (let i = 0; i < RX.length - 1; i++) {
-      const gapA = isSignal(RX[i], z) ? 8 : HW + 0.5;
-      const gapB = isSignal(RX[i + 1], z) ? 8 : HW + 0.5;
-      centerLine(z, RX[i] + gapA, RX[i + 1] - gapB, true);
+      const gapA = halfAtX(RX[i]) + (isSignal(RX[i], z) ? 4.5 : 0.5);
+      const gapB = halfAtX(RX[i + 1]) + (isSignal(RX[i + 1], z) ? 4.5 : 0.5);
+      const lanes = lanesAtZ(z);
+      if (lanes > 1) avenueLines(z, RX[i] + gapA, RX[i + 1] - gapB, true, lanes);
+      else centerLine(z, RX[i] + gapA, RX[i + 1] - gapB, true);
     }
 
   // Зебри: смуги вздовж руху, розкладені поперек дороги.
   for (const c of world.crosswalks) {
-    for (let k = -HW + 0.5; k <= HW - 0.4; k += 1.0) {
+    for (let k = -c.span + 0.5; k <= c.span - 0.4; k += 1.0) {
       if (c.roadAlongX) box(c.x, MARK_Y, c.z + k, c.width, 0.01, 0.5, mats.marking);
       else box(c.x + k, MARK_Y, c.z, 0.5, 0.01, c.width, mats.marking);
     }
   }
   // Стоп-лінії на регульованих перехрестях (права половина дороги перед зеброю).
   for (const s of world.signals) {
-    const d = HW + 2.2 + 1.5 + 0.45;
-    box(s.x + HW / 2, MARK_Y, s.z - d, HW, 0.01, 0.4, mats.marking);
-    box(s.x - HW / 2, MARK_Y, s.z + d, HW, 0.01, 0.4, mats.marking);
-    box(s.x + d, MARK_Y, s.z + HW / 2, 0.4, 0.01, HW, mats.marking);
-    box(s.x - d, MARK_Y, s.z - HW / 2, 0.4, 0.01, HW, mats.marking);
+    const hx = halfAtX(s.x);
+    const hz = halfAtZ(s.z);
+    const dz = hz + 2.2 + 1.5 + 0.45;
+    const dx = hx + 2.2 + 1.5 + 0.45;
+    box(s.x + hx / 2, MARK_Y, s.z - dz, hx, 0.01, 0.4, mats.marking);
+    box(s.x - hx / 2, MARK_Y, s.z + dz, hx, 0.01, 0.4, mats.marking);
+    box(s.x + dx, MARK_Y, s.z + hz / 2, 0.4, 0.01, hz, mats.marking);
+    box(s.x - dx, MARK_Y, s.z - hz / 2, 0.4, 0.01, hz, mats.marking);
+  }
+  // Велодоріжки ситуацій: на тротуарі — кольорова смуга, через дорогу — велопереїзд із квадратиками.
+  for (const p of world.bikePaths) {
+    const len = Math.hypot(p.b.x - p.a.x, p.b.z - p.a.z);
+    const cx = (p.a.x + p.b.x) / 2;
+    const cz = (p.a.z + p.b.z) / 2;
+    const ax = Math.abs(p.b.x - p.a.x) > Math.abs(p.b.z - p.a.z);
+    if (onRoad(cx, cz)) {
+      for (let k = -len / 2 + 0.25; k < len / 2; k += 1)
+        for (const side of [-1, 1]) {
+          const ox = ax ? k : (side * p.width) / 2;
+          const oz = ax ? (side * p.width) / 2 : k;
+          box(cx + ox, MARK_Y + 0.002, cz + oz, 0.5, 0.01, 0.5, mats.marking);
+        }
+      box(cx, MARK_Y, cz, ax ? len : p.width, 0.01, ax ? p.width : len, mats.bike);
+    } else {
+      box(cx, CURB + 0.014, cz, ax ? len : p.width, 0.01, ax ? p.width : len, mats.bike);
+      for (let k = -len / 2 + 6; k < len / 2 - 3; k += 20) bikeGlyphRaised(ax ? cx + k : cx, ax ? cz : cz + k, ax);
+    }
+  }
+  function bikeGlyphRaised(x: number, z: number, alongX: boolean) {
+    for (const k of [-0.36, 0.36]) {
+      const w = MeshBuilder.CreateDisc('bikeWheel', { radius: 0.2, tessellation: 10 }, scene);
+      w.rotation.x = Math.PI / 2;
+      w.position.set(x + (alongX ? k : 0), CURB + 0.02, z + (alongX ? 0 : k));
+      b.add(w, mats.marking);
+    }
   }
   // Лінія «Дати дорогу» — трикутники вершиною до водія; перед знаком «STOP» — суцільна стоп-лінія.
   for (const g of world.lines) {
@@ -587,10 +650,10 @@ export function buildCity(scene: Scene, shadows: boolean, world: WorldFeatures):
   const free = (x: number, z: number) => avoid.every((a) => Math.hypot(a.x - x, a.z - z) > a.r);
   for (let i = 0; i < RX.length - 1; i++)
     for (let j = 0; j < RZ.length - 1; j++) {
-      const x0 = RX[i] + HW + 1.7;
-      const x1 = RX[i + 1] - HW - 1.7;
-      const z0 = RZ[j] + HW + 1.7;
-      const z1 = RZ[j + 1] - HW - 1.7;
+      const x0 = RX[i] + halfAtX(RX[i]) + 1.7;
+      const x1 = RX[i + 1] - halfAtX(RX[i + 1]) - 1.7;
+      const z0 = RZ[j] + halfAtZ(RZ[j]) + 1.7;
+      const z1 = RZ[j + 1] - halfAtZ(RZ[j + 1]) - 1.7;
       for (let p = 12; p < x1 - x0 - 10; p += 13) {
         if (free(x0 + p, z0)) streetTree(x0 + p, z0);
         if (free(x0 + p, z1)) streetTree(x0 + p, z1);
@@ -600,8 +663,8 @@ export function buildCity(scene: Scene, shadows: boolean, world: WorldFeatures):
         if (free(x1, z0 + p)) streetTree(x1, z0 + p);
       }
       // Ліхтарі — між деревами, біля бордюру, плафоном над дорогою.
-      const ex = RX[i] + HW + 0.5;
-      const ez = RZ[j] + HW + 0.5;
+      const ex = RX[i] + halfAtX(RX[i]) + 0.5;
+      const ez = RZ[j] + halfAtZ(RZ[j]) + 0.5;
       for (let p = 18.5; p < x1 - x0 - 10; p += 26) if (free(x0 + p, ez)) streetLamp(x0 + p, ez, 0, -1);
       for (let p = 18.5; p < z1 - z0 - 10; p += 26) if (free(ex, z0 + p)) streetLamp(ex, z0 + p, -1, 0);
     }
@@ -712,11 +775,22 @@ export function buildCity(scene: Scene, shadows: boolean, world: WorldFeatures):
         plate(rect(0.85, 0.85), mats.signBlue, 0, 0);
         plate(disc(0.36, 3), mats.signWhite, 0.01, Math.PI / 2);
         break;
+      case 'bikePath':
+        plate(disc(0.45, 16), mats.signBlue, 0, 0);
+        plate(disc(0.12, 10), mats.signWhite, 0.01, 0, -0.17, -0.08);
+        plate(disc(0.12, 10), mats.signWhite, 0.01, 0, 0.17, -0.08);
+        plate(rect(0.34, 0.05), mats.signWhite, 0.015, 0.4, 0, 0.02);
+        break;
+      case 'children':
+        plate(disc(0.62, 3), mats.signRed, 0, Math.PI / 2);
+        plate(disc(0.45, 3), mats.signWhite, 0.01, Math.PI / 2);
+        plate(rect(0.09, 0.26), mats.signBlack, 0.02, 0, -0.08, -0.06);
+        plate(rect(0.07, 0.2), mats.signBlack, 0.02, 0, 0.08, -0.1);
+        break;
     }
   }
 
   // ---------- Антураж ситуацій ----------
-  const onRoad = (x: number, z: number) => RX.some((v) => Math.abs(v - x) <= HW) || RZ.some((v) => Math.abs(v - z) <= HW);
   for (const p of world.props) {
     const y = onRoad(p.x, p.z) ? 0 : CURB;
     const f = forwardOf(p.heading);
@@ -773,9 +847,11 @@ export function buildCity(scene: Scene, shadows: boolean, world: WorldFeatures):
     ] as const) {
       const f = forwardOf(heading);
       const r = rightOf(heading);
-      const off = HW + 0.7;
-      const px = sig.x - f.x * off + r.x * off;
-      const pz = sig.z - f.z * off + r.z * off;
+      // own — дорога, якою їде транспорт, для якого цей світлофор; cross — поперечна.
+      const own = axis === 'ns' ? halfAtX(sig.x) : halfAtZ(sig.z);
+      const cross = axis === 'ns' ? halfAtZ(sig.z) : halfAtX(sig.x);
+      const px = sig.x - f.x * (cross + 0.7) + r.x * (own + 0.7);
+      const pz = sig.z - f.z * (cross + 0.7) + r.z * (own + 0.7);
       const pole = MeshBuilder.CreateCylinder('tlPole', { diameter: 0.14, height: 3.6, tessellation: 6 }, scene);
       pole.position.set(px, CURB + 1.8, pz);
       b.add(pole, mats.pole);
