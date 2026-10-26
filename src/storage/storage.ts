@@ -16,11 +16,20 @@ export interface AnswerRecord {
   correct: boolean;
 }
 
+/** Відповідь на крок оформлення ДТП (step — id кроку). */
+export interface ProcedureRecord {
+  step: string;
+  option: number;
+  correct: boolean;
+}
+
 export interface RunResult {
   mode: Mode;
   /** Білети заїзду в порядку маршруту (індекси в answers — позиції в цьому списку). */
   ids: string[];
   answers: AnswerRecord[];
+  /** Кроки оформлення ДТП не з вини учня (якщо таке ДТП було) — теж зараховуються. */
+  procedure: ProcedureRecord[];
   correct: number;
   total: number;
   passed: boolean;
@@ -110,9 +119,17 @@ export function save(data: Stored, store: KeyValueStore | null = defaultStore())
   }
 }
 
-export function buildResult(mode: Mode, answers: AnswerRecord[], total: number, time: number, ids: string[] = []): RunResult {
-  const correct = answers.filter((a) => a.correct).length;
-  return { mode, ids, answers, correct, total, passed: total - correct <= EXAM_MAX_MISTAKES, time };
+export function buildResult(
+  mode: Mode,
+  answers: AnswerRecord[],
+  total: number,
+  time: number,
+  ids: string[] = [],
+  procedure: ProcedureRecord[] = [],
+): RunResult {
+  const correct = answers.filter((a) => a.correct).length + procedure.filter((a) => a.correct).length;
+  const all = total + procedure.length;
+  return { mode, ids, answers, procedure, correct, total: all, passed: all - correct <= EXAM_MAX_MISTAKES, time };
 }
 
 /** Позначає білети заїзду як бачені; коли бачено всю колоду (poolSize), починається нове коло. */

@@ -5,15 +5,24 @@ at each situation the world pauses and the player answers a ticket. A wrong answ
 
 ## Commands
 
-- `npm run dev` — dev server (`?debug` exposes the game as `window.__cruise`; with it `&tickets=id1,id2&seed=N` fixes the run)
+- `npm run dev` — dev server (`?debug` exposes the game as `window.__cruise`; with it `&tickets=id1,id2&seed=N` fixes the run,
+  `&innocent=N` makes ticket N an at-no-fault crash)
 - `npm test` — Vitest (simulation and storage); `npm run typecheck`; `npm run build`
 
 ## Layout
 
-- `src/tickets/tickets.ts` — the bank of ticket templates (50) in local coordinates (ego approaches from the south, +X = right):
-  question, options, explanation, ПДР rule, stop line, actors, signs, props, light scripts. Helpers in `local.ts`.
+- `src/tickets/tickets.ts` — the bank of ticket templates (100) in local coordinates (ego approaches from the south, +X = right):
+  question, options, explanation, ПДР rule, stop line, actors, signs, props, bike paths, light scripts. More templates in
+  `cyclists.ts`, `more.ts`, `avenue.ts`; helpers (`ask`, `drive`, `walk`, stop lines, lanes) in `local.ts`.
+- Sites: `start` (yard exit), `node` (intersection; with `lanes` — on an avenue), `block` (between intersections of a street),
+  `avenue` (between intersections of an avenue; ego corners only within z −8…6, `laneIn`/`laneOut` lane indices from the centre line).
+- City: 8×8 grid, streets have one lane each way; avenues (`CITY.avenuesX/Z`: X = 270 — 2 lanes, Z = −90 — 3 lanes) have a bike lane
+  at the curb. Lane helpers in `src/sim/city.ts`.
 - `src/tickets/plan.ts` — run generator: draws `RUN_SIZE` (20) tickets (unseen first), lays out a route on the city grid
-  (backtracking, no node visited twice) and places templates into world coordinates → `RunPlan` (route, tickets, world features).
+  (backtracking with a small lookahead, no node visited twice), plans the ego's lane on avenues (lane changes before turns and
+  templates) and places templates into world coordinates → `RunPlan` (route, tickets, world features). With `INNOCENT_CHANCE` (5 %)
+  per ticket (at most one per run, never the first) a ticket becomes an at-no-fault crash: a car from behind (`atFault`) rear-ends
+  the ego after a correct answer, and the game runs the step-by-step accident procedure (`src/tickets/procedure.ts`, ПДР 2.10/2.11).
 - `src/sim/` — pure, deterministic simulation (no Babylon/DOM). `new Sim(plan)`; `sim.ts` drives the ego on autopilot, spawns
   each ticket's actors so they reach their `gap` from the conflict point exactly at the decision moment, and
   times wrong answers so the crash always happens. `snapshot()`/`restore()` replay a situation.
@@ -27,5 +36,8 @@ at each situation the world pauses and the player answers a ticket. A wrong answ
 - UI text, comments and test names are in Ukrainian; keep it that way.
 - Coordinates: heading 0 = +Z, positive heading turns right (+X); right-hand traffic, lane offset 1.75 m.
 - After changing a ticket, run `npm test`: `tests/tickets.test.ts` places every template on its own route and checks
-  every wrong option crashes and the correct one does not; it also runs several full random runs without a crash.
+  every wrong option crashes and the correct one does not, that the at-no-fault variant crashes only after a correct answer;
+  it also runs several full random runs without a crash and checks the ego's path has no kinks.
+- Actors that end up driving ahead of the ego in its lane must be faster than it (cars accelerate after the conflict point);
+  cyclists and pedestrians must leave the ego's lane.
 - The ego car's dimensions are an Audi A5 Coupé 2012 (`CAR` in `src/config.ts`).

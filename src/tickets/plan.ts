@@ -1,15 +1,18 @@
 import { CITY } from '../config';
 import type { LightState, SignalizedIntersection, WorldFeatures } from '../sim/city';
+import { halfAtX, halfAtZ, lanesAtX, lanesAtZ, laneOff } from '../sim/city';
 import type { Corner } from '../sim/path';
 import type { Vec2 } from '../sim/math';
 import { forwardOf, rightOf } from '../sim/math';
 import { seededRandom } from '../sim/random';
-import { NODE_CROSSWALKS, O, R_LEFT, R_RIGHT, exitArm, priorityLines, prioritySigns } from './local';
+import { O, R_LEFT, R_RIGHT, exitArm, nodeCrosswalks, priorityLines, prioritySigns } from './local';
 import { TICKETS } from './tickets';
-import type { ActorSpec, LocalLights, NodeTemplate, Ticket, TicketTemplate } from './types';
+import type { ActorSpec, AvenueTemplate, LocalLights, NodeTemplate, Ticket, TicketTemplate } from './types';
 
 /** Скільки білетів у одному маршруті. */
 export const RUN_SIZE = 20;
+/** Імовірність, що білет стане ДТП не з вини учня (у нього в'їжджають ззаду). Не більше одного на заїзд. */
+export const INNOCENT_CHANCE = 0.05;
 
 /**
  * План заїзду: які білети, у якому порядку й де саме в місті. Будується генератором маршруту
@@ -65,23 +68,29 @@ type Placement =
   | { kind: 'start'; template: TicketTemplate | null; frame: Frame; turn: 'left' | 'right' }
   | { kind: 'pass'; node: [number, number]; frame: Frame; turn: -1 | 0 | 1 }
   | { kind: 'node'; template: NodeTemplate; node: [number, number]; frame: Frame }
-  | { kind: 'block'; template: TicketTemplate; frame: Frame };
+  | { kind: 'block'; template: TicketTemplate; frame: Frame }
+  | { kind: 'avenue'; template: AvenueTemplate; frame: Frame };
 
 const nodeKey = (i: number, j: number) => `${i},${j}`;
 const edgeKey = (a: [number, number], b: [number, number]) => [nodeKey(...a), nodeKey(...b)].sort().join('|');
 const inGrid = (i: number, j: number) => i >= 0 && j >= 0 && i < N && j < N;
 const interiorNode = (i: number, j: number) => i > 0 && j > 0 && i < N - 1 && j < N - 1;
 const nodePos = (n: [number, number]): Vec2 => ({ x: RX[n[0]], z: RZ[n[1]] });
+/** Смуги в кожен бік дороги, якою рухаються в напрямку dir через вузол n. */
+const lanesAlong = (n: [number, number], dir: Dir) => (dir === 0 || dir === 2 ? lanesAtX(RX[n[0]]) : lanesAtZ(RZ[n[1]]));
+const onAvenue = (n: [number, number]) => lanesAtX(RX[n[0]]) > 1 || lanesAtZ(RZ[n[1]]) > 1;
 
-/** Учасники, що після перехрестя їдуть смугою учня попереду нього: квартал за ними зайнятий. */
+/** Учасники, що після перехрестя їдуть смугами учня попереду нього: квартал за ними зайнятий. */
 function occupiesExit(t: NodeTemplate): boolean {
   const arm = exitArm(t.turn);
+  const own = t.lanes ? t.lanes * CITY.laneWidth : CITY.roadHalfWidth;
+  const cross = CITY.roadHalfWidth;
   return t.actors.some((a) => {
     const p = a.path[a.path.length - 1];
-    if (a.kind === 'pedestrian' || a.parked) return false;
-    if (arm === 'N') return Math.abs(p.x - O) < 0.5 && p.z > 10;
-    if (arm === 'E') return Math.abs(p.z + O) < 0.5 && p.x > 10;
-    return Math.abs(p.z - O) < 0.5 && p.x < -10;
+    if (a.kind === 'pedestrian' || a.parked || a.atFault) return false;
+    if (arm === 'N') return p.x > 0 && p.x < own && p.z > 10;
+    if (arm === 'E') return p.z < 0 && p.z > -cross && p.x > 10;
+    return p.z > 0 && p.z < cross && p.x < -10;
   });
 }
 
@@ -107,7 +116,7 @@ function layout(templates: TicketTemplate[], rnd: () => number): Placement[] | n
   const dir0: Dir = startTurn === 'right' ? 1 : 3;
   const at0 = YARD_NODES[startTurn === 'right' ? 'E' : 'W'];
   const start: Placement = { kind: 'start', template: first, frame: startFrame, turn: startTurn };
-  let budget = 40000;
+  let budget = 12000;
 
   const out: Placement[] = [start];
   const edgeOf = (s: SearchState): [[number, number], [number, number]] => {
@@ -139,32 +148,64 @@ function layout(templates: TicketTemplate[], rnd: () => number): Placement[] | n
     return { at: n, dir: d, edgeFree, edgeInterior: interior, visited, usedEdges };
   };
 
-  const go = (k: number, s: SearchState, passes: number): boolean => {
-    if (--budget < 0) return false;
-    if (k === rest.length) return true;
-    const t = rest[k];
+  const used = rest.map(() => false);
+  /** Скільки ще не розставлених шаблонів (за порядком) пробуємо в кожній точці маршруту. */
+  const LOOKAHEAD = 3;
+
+  const tryHere = (t: TicketTemplate, s: SearchState, placed: number): boolean => {
     const nodeFrame: Frame = { origin: nodePos(s.at), heading: HEADING[s.dir] };
-    if (t.site === 'block' && s.edgeFree && s.edgeInterior) {
+    const edgeMid = (): Frame => {
       const [a, b] = edgeOf(s);
       const pa = nodePos(a);
       const pb = nodePos(b);
-      const mid = { x: (pa.x + pb.x) / 2, z: (pa.z + pb.z) / 2 };
-      out.push({ kind: 'block', template: t, frame: { origin: mid, heading: HEADING[s.dir] } });
-      if (go(k + 1, { ...s, edgeFree: false }, 0)) return true;
+      return { origin: { x: (pa.x + pb.x) / 2, z: (pa.z + pb.z) / 2 }, heading: HEADING[s.dir] };
+    };
+    const lanes = lanesAlong(s.at, s.dir);
+    // Об'їзд у кварталі закінчується близько до наступного перехрестя — не перед поворотом на проспект.
+    const detourOk = !(t.site === 'block' && t.ego?.length && onAvenue(s.at));
+    if (t.site === 'block' && s.edgeFree && s.edgeInterior && lanes === 1 && detourOk) {
+      out.push({ kind: 'block', template: t, frame: edgeMid() });
+      if (go(placed + 1, { ...s, edgeFree: false }, 0)) return true;
+      out.pop();
+    }
+    // Біля перехрестя двох проспектів повороти довгі — там ділянок проспекту з ситуаціями не буває.
+    const [ea, eb] = edgeOf(s);
+    const nearAvenueCrossing = [ea, eb].some((n) => lanesAtX(RX[n[0]]) > 1 && lanesAtZ(RZ[n[1]]) > 1);
+    if (t.site === 'avenue' && s.edgeFree && lanes === t.lanes && !nearAvenueCrossing) {
+      out.push({ kind: 'avenue', template: t, frame: edgeMid() });
+      if (go(placed + 1, { ...s, edgeFree: false }, 0)) return true;
       out.pop();
     }
     if (t.site === 'node' && interiorNode(...s.at) && !s.visited.has(nodeKey(...s.at))) {
+      const crossLanes = lanesAlong(s.at, turnDir(s.dir, 1));
+      const fits = t.lanes ? lanes === t.lanes && crossLanes === 1 : !onAvenue(s.at);
       const kTurn = t.turn === 'straight' ? 0 : t.turn === 'right' ? 1 : -1;
-      if (turnsFrom(s).includes(kTurn)) {
+      if (fits && turnsFrom(s).includes(kTurn)) {
         out.push({ kind: 'node', template: t, node: s.at, frame: nodeFrame });
-        if (go(k + 1, leave(s, kTurn, !occupiesExit(t)), 0)) return true;
+        if (go(placed + 1, leave(s, kTurn, !occupiesExit(t)), 0)) return true;
         out.pop();
       }
     }
+    return false;
+  };
+
+  const go = (placed: number, s: SearchState, passes: number): boolean => {
+    if (--budget < 0) return false;
+    if (placed === rest.length) return true;
+    let tried = 0;
+    for (let k = 0; k < rest.length && tried < LOOKAHEAD; k++) {
+      if (used[k]) continue;
+      tried++;
+      used[k] = true;
+      const ok = tryHere(rest[k], s, placed);
+      used[k] = false;
+      if (ok) return true;
+    }
     if (passes >= MAX_PASSES || s.visited.has(nodeKey(...s.at))) return false;
+    const nodeFrame: Frame = { origin: nodePos(s.at), heading: HEADING[s.dir] };
     for (const kTurn of turnsFrom(s)) {
       out.push({ kind: 'pass', node: s.at, frame: nodeFrame, turn: kTurn });
-      if (go(k, leave(s, kTurn, true), passes + 1)) return true;
+      if (go(placed, leave(s, kTurn, true), passes + 1)) return true;
       out.pop();
     }
     return false;
@@ -217,13 +258,27 @@ const worldLights = (heading: number, l: Partial<LocalLights>): Partial<LightSta
   return out;
 };
 
+/** Радіус кутів перестроювання (плавна «S» замість ривка вбік). */
+const LANE_CHANGE_R = 30;
+
 /** Переносить розставлені шаблони у світові координати: маршрут учня, білети й обстановку міста. */
 function realize(placements: Placement[], seed: number): RunPlan {
   const route: Corner[] = [];
   const tickets: Ticket[] = [];
-  const world: WorldFeatures = { signals: [], signs: [], crosswalks: [], lines: [], props: [], open: [], avoid: [], wideNodes: [] };
+  const world: WorldFeatures = {
+    signals: [],
+    signs: [],
+    crosswalks: [],
+    lines: [],
+    props: [],
+    bikePaths: [],
+    open: [],
+    avoid: [],
+    wideNodes: [],
+  };
 
-  const addTemplate = (t: TicketTemplate, f: Frame, signal?: string) => {
+  /** own — половина ширини дороги учня, cross — поперечної (для зебр перехрестя). */
+  const addTemplate = (t: TicketTemplate, f: Frame, own: number, cross: number, signal?: string) => {
     const actors: ActorSpec[] = t.actors.map((a) => ({ ...a, path: a.path.map((c) => cornerToWorld(f, c)) }));
     const ticket: Ticket = {
       id: t.id,
@@ -240,13 +295,55 @@ function realize(placements: Placement[], seed: number): RunPlan {
     tickets.push(ticket);
     for (const s of t.signs ?? []) world.signs.push({ ...s, ...toWorld(f, s), facing: s.facing + f.heading });
     for (const c of t.crosswalks ?? [])
-      world.crosswalks.push({ ...toWorld(f, c), roadAlongX: alongX(f.heading + (c.acrossEgoRoad ? 0 : Math.PI / 2)), width: c.width ?? 3 });
+      world.crosswalks.push({
+        ...toWorld(f, c),
+        roadAlongX: alongX(f.heading + (c.acrossEgoRoad ? 0 : Math.PI / 2)),
+        width: c.width ?? 3,
+        span: c.acrossEgoRoad ? own : cross,
+      });
     for (const p of t.props ?? []) {
       world.props.push({ ...p, ...toWorld(f, p), heading: p.heading + f.heading });
       world.avoid.push({ ...toWorld(f, p), r: 2.5 });
     }
-    for (const a of actors) if (a.kind === 'pedestrian') for (const c of a.path) world.avoid.push({ x: c.x, z: c.z, r: 3 });
+    for (const bp of t.bikePaths ?? []) {
+      const a = toWorld(f, bp.a);
+      const b = toWorld(f, bp.b);
+      world.bikePaths.push({ a, b, width: bp.width ?? 1.5 });
+      const n = Math.ceil(Math.hypot(b.x - a.x, b.z - a.z) / 3);
+      for (let k = 0; k <= n; k++) world.avoid.push({ x: a.x + ((b.x - a.x) * k) / n, z: a.z + ((b.z - a.z) * k) / n, r: 2 });
+    }
+    for (const a of actors)
+      if (a.kind === 'pedestrian' || a.kind === 'cyclist') for (const c of a.path) world.avoid.push({ x: c.x, z: c.z, r: 3 });
   };
+
+  // Смуга учня на поточній дорозі (0 — біля осьової). На звичайних вулицях — завжди 0.
+  let lane = 0;
+  const laneChange = (f: Frame, from: number, to: number, z0: number, z1: number) => {
+    if (from === to) return;
+    route.push({ ...toWorld(f, { x: laneOff(from), z: z0 }), r: LANE_CHANGE_R });
+    route.push({ ...toWorld(f, { x: laneOff(to), z: z1 }), r: LANE_CHANGE_R });
+  };
+  /**
+   * Маневр на перехресті: спершу (за потреби) перестроювання в смугу approach, потім поворот у смугу,
+   * що відповідає маневру: праворуч — у крайню праву, ліворуч — у крайню ліву, прямо — straightLane.
+   */
+  const nodeTurn = (f: Frame, k: number, approach: number, straightLane?: number) => {
+    const outHeading = f.heading + (k * Math.PI) / 2;
+    const outLanes = alongX(outHeading) ? lanesAtZ(f.origin.z) : lanesAtX(f.origin.x);
+    const outLane = k > 0 ? outLanes - 1 : k < 0 ? 0 : (straightLane ?? lane);
+    // Перестроювання закінчується до початку дуги повороту (або до краю поперечної дороги).
+    const clear = k > 0 ? -(laneOff(outLane) + R_RIGHT) : k < 0 ? laneOff(outLane) - R_LEFT : -halfCross(f);
+    const end = Math.min(-13, clear - 9);
+    laneChange(f, lane, approach, end - 15, end);
+    lane = approach;
+    if (k !== 0)
+      route.push({ ...toWorld(f, { x: laneOff(lane), z: k > 0 ? -laneOff(outLane) : laneOff(outLane) }), r: k > 0 ? R_RIGHT : R_LEFT });
+    else laneChange(f, lane, outLane, 13, 28);
+    lane = outLane;
+  };
+  const lanesIn = (f: Frame) => (alongX(f.heading) ? lanesAtZ(f.origin.z) : lanesAtX(f.origin.x));
+  const halfIn = (f: Frame) => (alongX(f.heading) ? halfAtZ(f.origin.z) : halfAtX(f.origin.x));
+  const halfCross = (f: Frame) => (alongX(f.heading) ? halfAtX(f.origin.x) : halfAtZ(f.origin.z));
 
   let signals = 0;
   let last: Placement | null = null;
@@ -256,18 +353,23 @@ function realize(placements: Placement[], seed: number): RunPlan {
       case 'start':
         route.push(toWorld(f, { x: 0, z: -44 }));
         route.push(p.turn === 'right' ? { ...toWorld(f, { x: 0, z: -O }), r: R_RIGHT } : { ...toWorld(f, { x: 0, z: O }), r: R_LEFT });
-        if (p.template) addTemplate(p.template, f);
+        if (p.template) addTemplate(p.template, f, CITY.roadHalfWidth, CITY.roadHalfWidth);
+        lane = 0;
         // Навпроти виїзду з двору — без високих будинків: камера дивиться через дорогу.
         world.open.push({ ...toWorld(f, { x: 0, z: 8 }), r: 26 });
         break;
-      case 'pass':
-        if (p.turn !== 0) route.push({ ...toWorld(f, p.turn > 0 ? { x: O, z: -O } : { x: O, z: O }), r: p.turn > 0 ? R_RIGHT : R_LEFT });
+      case 'pass': {
+        const n = lanesIn(f);
+        nodeTurn(f, p.turn, p.turn > 0 ? n - 1 : p.turn < 0 ? 0 : lane);
         break;
+      }
       case 'node': {
         const t = p.template;
-        if (t.turn !== 'straight')
-          route.push({ ...toWorld(f, t.turn === 'right' ? { x: O, z: -O } : { x: O, z: O }), r: t.turn === 'right' ? R_RIGHT : R_LEFT });
-        const local = nodeFeatures(t);
+        const k = t.turn === 'right' ? 1 : t.turn === 'left' ? -1 : 0;
+        nodeTurn(f, k, t.lanes ? (t.laneIn ?? 0) : 0, t.lanes ? (t.laneOut ?? t.laneIn) : undefined);
+        const own = halfIn(f);
+        const cross = halfCross(f);
+        const local = nodeFeatures(t, own, cross);
         let signal: string | undefined;
         if (local.signal) {
           signal = `S${signals++}`;
@@ -276,16 +378,26 @@ function realize(placements: Placement[], seed: number): RunPlan {
         }
         for (const s of local.signs) world.signs.push({ ...s, ...toWorld(f, s), facing: s.facing + f.heading });
         for (const l of local.lines) world.lines.push({ ...l, ...toWorld(f, l), heading: l.heading + f.heading });
-        addTemplate({ ...t, crosswalks: [...(local.signal ? NODE_CROSSWALKS : []), ...(t.crosswalks ?? [])] }, f, signal);
-        world.open.push({ ...f.origin, r: 34 });
+        addTemplate({ ...t, crosswalks: [...(local.signal ? nodeCrosswalks(own, cross) : []), ...(t.crosswalks ?? [])] }, f, own, cross, signal);
+        world.open.push({ ...f.origin, r: 34 + (own - CITY.roadHalfWidth) });
         if (local.signal || t.crosswalks?.length) world.wideNodes.push(f.origin);
         break;
       }
       case 'block': {
         const t = p.template;
         if (t.site === 'block') for (const c of t.ego ?? []) route.push(cornerToWorld(f, c));
-        addTemplate(t, f);
+        addTemplate(t, f, CITY.roadHalfWidth, CITY.roadHalfWidth);
         world.open.push({ ...f.origin, r: 34 });
+        break;
+      }
+      case 'avenue': {
+        const t = p.template;
+        laneChange(f, lane, t.laneIn, -32, -17);
+        for (const c of t.ego ?? []) route.push(cornerToWorld(f, c));
+        lane = t.laneOut;
+        const own = halfIn(f);
+        addTemplate(t, f, own, own);
+        world.open.push({ ...f.origin, r: 40 });
         break;
       }
     }
@@ -303,28 +415,44 @@ function realize(placements: Placement[], seed: number): RunPlan {
         ? lf.heading + (last!.turn * Math.PI) / 2
         : lf.heading;
   const ef: Frame = { origin: lf.origin, heading: exitHeading };
-  const [near, far] = last!.kind === 'block' ? [30, 40] : [40, 55];
-  const finish = toWorld(ef, { x: O, z: near });
-  route.push(toWorld(ef, { x: O, z: far }));
+  const [near, far] = last!.kind === 'block' || last!.kind === 'avenue' ? [30, 40] : [40, 55];
+  const finish = toWorld(ef, { x: laneOff(lane), z: near });
+  route.push(toWorld(ef, { x: laneOff(lane), z: far }));
 
   return { seed, ids: tickets.map((t) => t.id), route, finish, tickets, world };
 }
 
-function nodeFeatures(t: NodeTemplate) {
+function nodeFeatures(t: NodeTemplate, own: number, cross: number) {
   switch (t.control) {
     case 'giveWay':
     case 'stop':
-      return { signal: false, signs: prioritySigns(true, t.control), lines: priorityLines(true, t.control) };
+      return { signal: false, signs: prioritySigns(true, t.control, own, cross), lines: priorityLines(true, t.control, own, cross) };
     case 'main':
-      return { signal: false, signs: prioritySigns(false, 'giveWay'), lines: priorityLines(false, 'giveWay') };
+      return { signal: false, signs: prioritySigns(false, 'giveWay', own, cross), lines: priorityLines(false, 'giveWay', own, cross) };
     case 'flashGiveWay':
-      return { signal: true, signs: prioritySigns(true, 'giveWay'), lines: priorityLines(true, 'giveWay') };
+      return { signal: true, signs: prioritySigns(true, 'giveWay', own, cross), lines: priorityLines(true, 'giveWay', own, cross) };
     case 'signal':
     case 'flash':
       return { signal: true, signs: [], lines: [] };
     case 'equal':
       return { signal: false, signs: [], lines: [] };
   }
+}
+
+/** Позначає один білет (крім виїзду з двору) як ДТП не з вини учня — з імовірністю chance на кожен білет. */
+function pickInnocent(plan: RunPlan, rnd: () => number, chance: number) {
+  for (let i = 1; i < plan.tickets.length; i++)
+    if (rnd() < chance) {
+      plan.tickets[i].innocent = true;
+      return plan;
+    }
+  return plan;
+}
+
+/** Робить білет index ДТП не з вини учня (для тестів і ?innocent=N). */
+export function withInnocent(plan: RunPlan, index: number): RunPlan {
+  plan.tickets.forEach((t, i) => (t.innocent = i === index ? true : undefined));
+  return plan;
 }
 
 /** План для заданих шаблонів у заданому порядку (для тестів і налагодження). */
@@ -336,13 +464,27 @@ export function planFor(templates: TicketTemplate[], seed = 1): RunPlan {
   throw new Error(`Не вдалося прокласти маршрут для: ${templates.map((t) => t.id).join(', ')}`);
 }
 
-/** Новий заїзд: випадкові білети (спершу ще не бачені) і новий маршрут. */
-export function createRunPlan(seed: number, seen: ReadonlySet<string> = new Set(), count = RUN_SIZE, pool = TICKETS): RunPlan {
+/**
+ * Новий заїзд: випадкові білети (спершу ще не бачені) і новий маршрут. Якщо вибрані білети ніяк не
+ * розставити містом, кілька з них поступово замінюються іншими.
+ */
+export function createRunPlan(
+  seed: number,
+  seen: ReadonlySet<string> = new Set(),
+  count = RUN_SIZE,
+  pool = TICKETS,
+  innocentChance = INNOCENT_CHANCE,
+): RunPlan {
   const rnd = seededRandom(seed);
-  for (let attempt = 0; attempt < 20; attempt++) {
+  for (let attempt = 0; attempt < 40; attempt++) {
     const picked = drawTickets(pool, count, rnd, seen);
+    for (let k = 0; k < Math.max(0, attempt - 9); k++) {
+      const i = 1 + Math.floor(rnd() * (picked.length - 1));
+      const spare = pool.filter((t) => t.site !== 'start' && !picked.includes(t));
+      if (spare.length) picked[i] = spare[Math.floor(rnd() * spare.length)];
+    }
     const placements = layout(picked, seededRandom(seed * 31 + attempt));
-    if (placements) return realize(placements, seed);
+    if (placements) return pickInnocent(realize(placements, seed), seededRandom(seed * 13 + 7), innocentChance);
   }
   throw new Error('Не вдалося прокласти маршрут');
 }

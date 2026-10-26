@@ -846,3 +846,53 @@ p {
     font-size: 16px;
   }
 }
+
+/* ---------- ДТП не з вини учня: покрокове оформлення ---------- */
+.crash-flash.innocent .crash-title {
+  background: var(--warn);
+  box-shadow: 0 12px 34px rgba(217, 131, 36, 0.45);
+}
+.procedure .steps {
+  display: flex;
+  gap: 4px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.procedure .steps li {
+  flex: 1;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--hairline);
+}
+.procedure .steps li.done {
+  background: var(--accent);
+}
+.procedure .steps li.current {
+  background: var(--warn);
+}
+.procedure .step-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink-2);
+}
+.option:disabled {
+  cursor: default;
+  transform: none;
+}
+.option.right {
+  background: rgba(31, 157, 106, 0.14);
+  border-color: var(--ok);
+}
+.option.wrong {
+  background: rgba(217, 71, 75, 0.12);
+  border-color: var(--danger);
+}
+.option.dim {
+  opacity: 0.55;
+}
+.section-title {
+  font-size: 15px;
+  font-weight: 700;
+  margin: 6px 0 0;
+}

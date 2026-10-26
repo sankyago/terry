@@ -1,6 +1,7 @@
 import type { ActorKind } from '../sim/kinds';
 import type { Mode } from '../storage/storage';
 import type { Ticket } from '../tickets/types';
+import type { ProcedureStep } from '../tickets/procedure';
 import { AlertIcon, CheckIcon, PlayIcon, RestartIcon } from './icons';
 
 const LETTERS = ['А', 'Б', 'В', 'Г'];
@@ -40,12 +41,22 @@ export function TicketCard({ ticket, index, total, retry, onAnswer }: TicketProp
 
 interface FeedbackProps {
   ticket: Ticket;
-  kind: 'correct' | 'replay';
+  kind: 'correct' | 'replay' | 'procedureDone';
   mode: Mode;
 }
 
 /** Плашка під час руху після відповіді. */
 export function Feedback({ ticket, kind, mode }: FeedbackProps) {
+  if (kind === 'procedureDone') {
+    return (
+      <div className="feedback glass info" role="status">
+        <strong>
+          <PlayIcon width={16} height={16} /> ДТП оформлено — продовжуємо маршрут
+        </strong>
+        <p>Ви діяли правильно в ситуації, тож вашої провини немає. Збитки відшкодовує страховик винуватця.</p>
+      </div>
+    );
+  }
   if (mode === 'exam' && kind === 'correct') {
     return (
       <div className="feedback glass ok compact" role="status">
@@ -74,17 +85,78 @@ const CRASH_TITLES: Record<ActorKind, string> = {
   bus: 'Зіткнення з автобусом',
   ambulance: 'Зіткнення зі швидкою',
   pedestrian: 'Наїзд на пішохода',
+  cyclist: 'Наїзд на велосипедиста',
 };
 
 /** Спалах «ДТП» у момент удару. */
-export function CrashFlash({ kind }: { kind: ActorKind }) {
+export function CrashFlash({ kind, innocent }: { kind: ActorKind; innocent?: boolean }) {
   return (
-    <div className="crash-flash" aria-live="assertive">
+    <div className={`crash-flash ${innocent ? 'innocent' : ''}`} aria-live="assertive">
       <div className="crash-title">
         <AlertIcon width={30} height={30} />
         <span>ДТП</span>
       </div>
-      <p>{CRASH_TITLES[kind]}</p>
+      <p>{innocent ? 'У вас в\'їхали ззаду — ви не винні' : CRASH_TITLES[kind]}</p>
+    </div>
+  );
+}
+
+interface ProcedureProps {
+  step: ProcedureStep;
+  index: number;
+  total: number;
+  /** Обрана відповідь (після вибору показуємо пояснення й кнопку «Далі»). */
+  chosen: number | null;
+  mode: Mode;
+  onAnswer(option: number): void;
+  onNext(): void;
+}
+
+/** Покроковий білет оформлення ДТП, у якому учень не винен. Сцена аварії лишається на екрані. */
+export function ProcedureCard({ step, index, total, chosen, mode, onAnswer, onNext }: ProcedureProps) {
+  const answered = chosen !== null;
+  const right = step.options.findIndex((o) => o.correct);
+  return (
+    <div className="sheet">
+      <div className="glass card ticket procedure scrollable" role="dialog" aria-label={step.title}>
+        <span className="eyebrow danger">
+          ДТП не з вашої вини · крок {index + 1} з {total}
+        </span>
+        <ol className="steps" aria-hidden="true">
+          {Array.from({ length: total }, (_, i) => (
+            <li key={i} className={i < index ? 'done' : i === index ? 'current' : ''} />
+          ))}
+        </ol>
+        <span className="step-title">{step.title}</span>
+        <h2>{step.question}</h2>
+        <div className="options">
+          {step.options.map((o, i) => {
+            const state = !answered ? '' : i === right ? 'right' : i === chosen ? 'wrong' : 'dim';
+            return (
+              <button key={i} className={`option ${state}`} onClick={() => onAnswer(i)} disabled={answered} autoFocus={i === 0}>
+                <span className="letter">{LETTERS[i]}</span>
+                <span>{o.text}</span>
+                {!answered && <kbd>{i + 1}</kbd>}
+              </button>
+            );
+          })}
+        </div>
+        {answered && (
+          <>
+            {(mode === 'training' || chosen !== right) && (
+              <>
+                <p className="small">{step.explanation}</p>
+                <span className="rule">{step.rule}</span>
+              </>
+            )}
+            <div className="actions">
+              <button className="primary big" onClick={onNext} autoFocus>
+                <PlayIcon width={18} height={18} /> {index + 1 < total ? 'Наступний крок' : 'Завершити й їхати далі'}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
     </div>
   );
 }

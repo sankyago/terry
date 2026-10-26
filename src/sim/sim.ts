@@ -5,7 +5,7 @@ import type { LightState, SignalizedIntersection } from './city';
 import type { Contact, OBB } from './collision';
 import { collideObbCircle, collideObbObb, toLocal } from './collision';
 import type { ActorKind } from './kinds';
-import { EGO_KIND, KINDS } from './kinds';
+import { EGO_KIND, KINDS, isVulnerable } from './kinds';
 import type { Vec2 } from './math';
 import { clamp, forwardOf } from './math';
 import type { Path } from './path';
@@ -61,6 +61,14 @@ export interface ActorState {
   hazard: boolean;
   child: boolean;
   cane: boolean;
+  /** Їде заднім ходом. */
+  reverse: boolean;
+  /** Винуватець ДТП, у якому учень не винен. */
+  atFault: boolean;
+  /** Стоїть до відповіді учня, потім рушає (departs). */
+  waiting: boolean;
+  /** Гальмує до зупинки (винуватець, коли учень сам рушив на неправильну відповідь). */
+  stopping: boolean;
   body: Body | null;
   /** Час з моменту наїзду (для анімації падіння пішохода), -1 — без удару. */
   hitTime: number;
@@ -75,6 +83,8 @@ export interface CrashInfo {
   /** Відносна швидкість зіткнення (м/с). */
   strength: number;
   time: number;
+  /** ДТП не з вини учня: у нього в'їхали, коли він діяв правильно. */
+  innocent: boolean;
 }
 
 export interface SimState {
@@ -129,7 +139,11 @@ const SPEC_COLORS: Record<ActorKind, string> = {
   ambulance: '#f4f6f5',
   bus: '#f0a030',
   pedestrian: '#5b6bd6',
+  cyclist: '#2f9e6e',
 };
+/** Винуватець ДТП не з вини учня: швидкість і час до удару після правильної відповіді. */
+const AT_FAULT_SPEED = 9;
+const AT_FAULT_HIT_TIME = 0.95;
 
 /** Мінімальний стан для планувальника — і для руху, і для прогнозу часу прибуття. */
 interface Kinematic {
@@ -166,7 +180,8 @@ export class Sim {
 
     this.prepared = this.tickets.map((ticket, ti) => {
       const stopS = nearestOnPath(this.egoPath, ticket.stopLine).s - CAR.length / 2;
-      const actors = ticket.actors.map((spec): PreparedActor => {
+      const specs = ticket.innocent ? [...ticket.actors, this.atFaultSpec(stopS)] : ticket.actors;
+      const actors = specs.map((spec): PreparedActor => {
         const path = roundedPath(spec.path, spec.kind === 'pedestrian' ? 0.25 : 0.5);
         this.paths.set(`${ti}:${spec.id}`, path);
         if (spec.parked)
@@ -174,8 +189,8 @@ export class Sim {
         const c = findConflict(this.egoPath, stopS, path);
         if (!c) throw new Error(`Ситуація ${ticket.id}: учасник ${spec.id} не перетинає маршрут`);
         const k = KINDS[spec.kind];
-        const clearS = c.sb + k.length / 2 + (spec.kind === 'pedestrian' ? 2.5 : 3.2);
-        if (spec.kind !== 'pedestrian') this.clearAt.set(`${ti}:${spec.id}`, clearS);
+        const clearS = c.sb + k.length / 2 + (isVulnerable(spec.kind) ? 2.5 : 3.2);
+        if (!isVulnerable(spec.kind)) this.clearAt.set(`${ti}:${spec.id}`, clearS);
         return {
           spec,
           path,
@@ -191,6 +206,30 @@ export class Sim {
     this.state = this.initialState();
     this.activate(0);
     this.updateEgoPose();
+  }
+
+  /**
+   * Неуважний водій ззаду: їде траєкторією учня й не гальмує. У момент рішення він за кілька метрів
+   * позаду, тож після правильної відповіді, поки учень стоїть і пропускає, в'їжджає в нього.
+   */
+  private atFaultSpec(stopS: number): ActorSpec {
+    const from = Math.max(0, stopS - 70);
+    const path = [];
+    for (let s = from; s < stopS + 10; s += 2) {
+      const p = poseOnPath(this.egoPath, s);
+      path.push({ x: p.x, z: p.z });
+    }
+    const contact = (KINDS.car.length + CAR.length) / 2;
+    return {
+      id: 'atFault',
+      kind: 'car',
+      color: '#7d8a91',
+      model: 'suv',
+      path,
+      speed: AT_FAULT_SPEED,
+      gap: contact + AT_FAULT_SPEED * AT_FAULT_HIT_TIME,
+      atFault: true,
+    };
   }
 
   private initialState(): SimState {
@@ -242,6 +281,11 @@ export class Sim {
     const correct = t.ticket.options[option]?.correct ?? false;
     st.answer = option;
     st.phaseTime = 0;
+    for (const a of st.actors)
+      if (a.waiting && a.ticket === st.ticket) {
+        a.waiting = false;
+        a.v = t.actors.find((pa) => `${st.ticket}:${pa.spec.id}` === a.id)?.spec.speed ?? 0;
+      }
     if (correct) {
       st.phase = 'yielding';
       return true;
@@ -250,6 +294,12 @@ export class Sim {
     // Учасник, з яким неминуче ДТП, приходить у точку конфлікту одночасно з учнем.
     for (const pa of t.actors) {
       if (pa.spec.parked) continue;
+      if (pa.spec.atFault) {
+        // Учень рушив сам — водій ззаду встигає загальмувати.
+        const a = st.actors.find((x) => x.id === `${st.ticket}:${pa.spec.id}`);
+        if (a) a.stopping = true;
+        continue;
+      }
       const te = Math.sqrt((2 * Math.max(0.5, pa.egoConflictS - st.ego.s)) / DRIVE.wrongGoAccel);
       const a = st.actors.find((x) => x.id === `${st.ticket}:${pa.spec.id}`);
       if (!a) continue;
@@ -257,6 +307,12 @@ export class Sim {
       if (remaining > 0) a.v = clamp(remaining / te, pa.spec.speed * 0.3, pa.spec.speed * 2);
     }
     return false;
+  }
+
+  /** Прибирає винуватця ДТП поточної ситуації (після оформлення ДТП маршрут продовжується без нього). */
+  dropAtFault() {
+    const st = this.state;
+    st.actors = st.actors.filter((a) => !(a.atFault && a.ticket === st.ticket));
   }
 
   correctOption(ticket = this.state.ticket): number {
@@ -302,8 +358,8 @@ export class Sim {
         ticket: index,
         kind: pa.spec.kind,
         color: pa.spec.color ?? SPEC_COLORS[pa.spec.kind],
-        s: parked ? 0 : pa.sAtDecision - pa.spec.speed * T,
-        v: parked ? 0 : pa.spec.speed,
+        s: parked ? 0 : pa.spec.departs ? pa.sAtDecision : pa.sAtDecision - pa.spec.speed * T,
+        v: parked || pa.spec.departs ? 0 : pa.spec.speed,
         x: 0,
         z: 0,
         heading: 0,
@@ -313,6 +369,10 @@ export class Sim {
         hazard: pa.spec.hazard ?? false,
         child: pa.spec.child ?? false,
         cane: pa.spec.cane ?? false,
+        reverse: pa.spec.reverse ?? false,
+        atFault: pa.spec.atFault ?? false,
+        stopping: false,
+        waiting: pa.spec.departs ?? false,
         body: null,
         hitTime: -1,
       };
@@ -332,7 +392,7 @@ export class Sim {
     const p = poseOnPath(path, a.s);
     a.x = p.x;
     a.z = p.z;
-    a.heading = p.heading;
+    a.heading = a.reverse ? p.heading + Math.PI : p.heading;
     a.alive = a.s >= 0 && a.s <= path.length;
   }
 
@@ -394,11 +454,12 @@ export class Sim {
 
     for (const a of st.actors) {
       if (a.body) {
-        integrateBody(a.body, dt, a.kind === 'pedestrian' ? 6 : 5.5);
+        integrateBody(a.body, dt, isVulnerable(a.kind) ? 6 : 5.5);
         a.hitTime += dt;
       } else {
+        if (a.stopping) a.v = Math.max(0, a.v - 6 * dt);
         // Проїхавши точку конфлікту, транспорт розганяється й не заважає учню далі.
-        if (a.s > (this.clearAt.get(a.id) ?? Infinity) && a.v < EXIT_SPEED) a.v = Math.min(EXIT_SPEED, a.v + EXIT_ACCEL * dt);
+        if (!a.stopping && !a.reverse && a.s > (this.clearAt.get(a.id) ?? Infinity) && a.v < EXIT_SPEED) a.v = Math.min(EXIT_SPEED, a.v + EXIT_ACCEL * dt);
         a.s += a.v * dt;
       }
       this.updateActorPose(a, this.actorPath(a));
@@ -497,6 +558,7 @@ export class Sim {
       z: a ? (a.z + e.z) / 2 : e.z,
       strength,
       time: st.time,
+      innocent: a?.atFault ?? false,
     };
     st.crashSettled = false;
     events.push({ type: 'crash', crash: { ...st.crash } });
@@ -510,8 +572,8 @@ export class Sim {
       // Зіткнення рахуються лише з учасниками поточної ситуації: решта вже не перетинає маршрут.
       if (!a.alive || a.ticket !== st.ticket) continue;
       const eo = this.egoObb();
-      const ped = a.kind === 'pedestrian';
-      const c: Contact | null = ped
+      const ped = isVulnerable(a.kind);
+      const c: Contact | null = a.kind === 'pedestrian'
         ? collideObbCircle(eo, { x: a.x, z: a.z, r: KINDS.pedestrian.width / 2 })
         : collideObbObb(eo, this.actorObb(a));
       if (!c) continue;
