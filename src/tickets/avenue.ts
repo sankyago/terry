@@ -290,7 +290,7 @@ const NODES: TicketTemplate[] = [
     stopLine: { x: lane(1), z: -6.3 },
     bikePaths: [{ a: { x: bikeLane(2), z: -HW }, b: { x: bikeLane(2), z: HW }, width: 1.6 }],
     actors: [
-      { id: 'bike', kind: 'cyclist', color: '#e4572e', path: [{ x: bikeLane(2), z: -70 }, { x: bikeLane(2), z: 40 }], speed: 5.5, gap: 9 },
+      { id: 'bike', kind: 'cyclist', color: '#e4572e', path: [{ x: bikeLane(2), z: -70 }, { x: bikeLane(2), z: 40 }], speed: 5.5, gap: 7 },
     ],
   },
   {
@@ -317,7 +317,7 @@ const NODES: TicketTemplate[] = [
     stopLine: { x: lane(0), z: SIGNAL_Z },
     actors: [
       { id: 'waiting', kind: 'car', color: '#c9d1d6', parked: true, path: [{ x: -lane(0), z: 10.4 }, { x: -lane(0), z: 9.4 }], speed: 0, gap: 0 },
-      { id: 'car', kind: 'car', color: '#2f9e6e', path: drive('N', 'S', { offIn: lane(1) }), speed: 11, gap: 28 },
+      { id: 'car', kind: 'car', color: '#2f9e6e', path: drive('N', 'S', { offIn: lane(1) }), speed: 11, gap: 14 },
     ],
   },
   {
@@ -367,7 +367,7 @@ const NODES: TicketTemplate[] = [
       'Транспорт із синім маячком і сиреною може не виконувати вимог світлофора. Усі інші зобов\'язані дати йому дорогу й забезпечити безперешкодний проїзд.',
     rule: 'ПДР, п. 3.2',
     stopLine: { x: lane(1), z: SIGNAL_Z },
-    actors: [{ id: 'ambulance', kind: 'ambulance', path: drive('E', 'W'), speed: 14, gap: 34, siren: true }],
+    actors: [{ id: 'ambulance', kind: 'ambulance', path: drive('E', 'W'), speed: 14, gap: 18, siren: true }],
   },
 ];
 

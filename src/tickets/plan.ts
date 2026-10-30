@@ -1,11 +1,15 @@
 import { CITY } from '../config';
 import type { LightState, SignalizedIntersection, WorldFeatures } from '../sim/city';
 import { halfAtX, halfAtZ, lanesAtX, lanesAtZ, laneOff } from '../sim/city';
-import type { Corner } from '../sim/path';
+import type { OBB } from '../sim/collision';
+import { collideObbCircle, collideObbObb, obbCorners } from '../sim/collision';
+import { EGO_KIND, KINDS } from '../sim/kinds';
+import type { Corner, Path } from '../sim/path';
+import { nearestOnPath, poseOnPath, roundedPath } from '../sim/path';
 import type { Vec2 } from '../sim/math';
 import { forwardOf, rightOf } from '../sim/math';
 import { seededRandom } from '../sim/random';
-import { O, R_LEFT, R_RIGHT, exitArm, nodeCrosswalks, priorityLines, prioritySigns } from './local';
+import { O, R_LEFT, R_RIGHT, exitArm, nodeCrosswalks, priorityLines, prioritySigns, uTurnCorners } from './local';
 import { TICKETS } from './tickets';
 import type { ActorSpec, AvenueTemplate, LocalLights, NodeTemplate, Ticket, TicketTemplate } from './types';
 
@@ -103,6 +107,8 @@ interface SearchState {
   edgeInterior: boolean;
   visited: Set<string>;
   usedEdges: Set<string>;
+  /** Після розвороту учень вдруге проїжджає попереднє перехрестя (без ситуації). */
+  back?: string;
 }
 
 const MAX_PASSES = 3;
@@ -148,6 +154,24 @@ function layout(templates: TicketTemplate[], rnd: () => number): Placement[] | n
     return { at: n, dir: d, edgeFree, edgeInterior: interior, visited, usedEdges };
   };
 
+  /**
+   * Розворот повертає учня тим самим кварталом до попереднього перехрестя. Можна, лише якщо в кварталі
+   * не було ситуації, а попереднє перехрестя — внутрішнє й без світлофора (його проїжджають ще раз).
+   */
+  const uTurnOk = (s: SearchState): boolean => {
+    if (!s.edgeFree) return false;
+    const [prev] = edgeOf(s);
+    if (!interiorNode(...prev) || onAvenue(prev)) return false;
+    for (const p of out)
+      if ((p.kind === 'node' || p.kind === 'pass') && p.node[0] === prev[0] && p.node[1] === prev[1])
+        return p.kind === 'pass' || !nodeFeatures(p.template, CITY.roadHalfWidth, CITY.roadHalfWidth).signal;
+    return false;
+  };
+  const uTurn = (s: SearchState): SearchState => {
+    const [prev] = edgeOf(s);
+    return { ...s, at: prev, dir: turnDir(s.dir, 2), edgeFree: false, visited: new Set(s.visited).add(nodeKey(...s.at)), back: nodeKey(...prev) };
+  };
+
   const used = rest.map(() => false);
   /** Скільки ще не розставлених шаблонів (за порядком) пробуємо в кожній точці маршруту. */
   const LOOKAHEAD = 3;
@@ -179,6 +203,14 @@ function layout(templates: TicketTemplate[], rnd: () => number): Placement[] | n
     if (t.site === 'node' && interiorNode(...s.at) && !s.visited.has(nodeKey(...s.at))) {
       const crossLanes = lanesAlong(s.at, turnDir(s.dir, 1));
       const fits = t.lanes ? lanes === t.lanes && crossLanes === 1 : !onAvenue(s.at);
+      if (t.turn === 'uturn') {
+        if (fits && uTurnOk(s)) {
+          out.push({ kind: 'node', template: t, node: s.at, frame: nodeFrame });
+          if (go(placed + 1, uTurn(s), 0)) return true;
+          out.pop();
+        }
+        return false;
+      }
       const kTurn = t.turn === 'straight' ? 0 : t.turn === 'right' ? 1 : -1;
       if (fits && turnsFrom(s).includes(kTurn)) {
         out.push({ kind: 'node', template: t, node: s.at, frame: nodeFrame });
@@ -201,7 +233,7 @@ function layout(templates: TicketTemplate[], rnd: () => number): Placement[] | n
       used[k] = false;
       if (ok) return true;
     }
-    if (passes >= MAX_PASSES || s.visited.has(nodeKey(...s.at))) return false;
+    if (passes >= MAX_PASSES || (s.visited.has(nodeKey(...s.at)) && s.back !== nodeKey(...s.at))) return false;
     const nodeFrame: Frame = { origin: nodePos(s.at), heading: HEADING[s.dir] };
     for (const kTurn of turnsFrom(s)) {
       out.push({ kind: 'pass', node: s.at, frame: nodeFrame, turn: kTurn });
@@ -365,8 +397,14 @@ function realize(placements: Placement[], seed: number): RunPlan {
       }
       case 'node': {
         const t = p.template;
-        const k = t.turn === 'right' ? 1 : t.turn === 'left' ? -1 : 0;
-        nodeTurn(f, k, t.lanes ? (t.laneIn ?? 0) : 0, t.lanes ? (t.laneOut ?? t.laneIn) : undefined);
+        if (t.turn === 'uturn') {
+          laneChange(f, lane, 0, -28, -13);
+          for (const c of uTurnCorners()) route.push(cornerToWorld(f, c));
+          lane = 0;
+        } else {
+          const k = t.turn === 'right' ? 1 : t.turn === 'left' ? -1 : 0;
+          nodeTurn(f, k, t.lanes ? (t.laneIn ?? 0) : 0, t.lanes ? (t.laneOut ?? t.laneIn) : undefined);
+        }
         const own = halfIn(f);
         const cross = halfCross(f);
         const local = nodeFeatures(t, own, cross);
@@ -378,7 +416,13 @@ function realize(placements: Placement[], seed: number): RunPlan {
         }
         for (const s of local.signs) world.signs.push({ ...s, ...toWorld(f, s), facing: s.facing + f.heading });
         for (const l of local.lines) world.lines.push({ ...l, ...toWorld(f, l), heading: l.heading + f.heading });
-        addTemplate({ ...t, crosswalks: [...(local.signal ? nodeCrosswalks(own, cross) : []), ...(t.crosswalks ?? [])] }, f, own, cross, signal);
+        addTemplate(
+          { ...t, stopLine: waitPoint(t), crosswalks: [...(local.signal ? nodeCrosswalks(own, cross) : []), ...(t.crosswalks ?? [])] },
+          f,
+          own,
+          cross,
+          signal,
+        );
         world.open.push({ ...f.origin, r: 34 + (own - CITY.roadHalfWidth) });
         if (local.signal || t.crosswalks?.length) world.wideNodes.push(f.origin);
         break;
@@ -410,7 +454,7 @@ function realize(placements: Placement[], seed: number): RunPlan {
     last!.kind === 'start'
       ? (last!.turn === 'right' ? Math.PI / 2 : -Math.PI / 2)
       : last!.kind === 'node'
-      ? lf.heading + (last!.template.turn === 'right' ? Math.PI / 2 : last!.template.turn === 'left' ? -Math.PI / 2 : 0)
+      ? lf.heading + { right: Math.PI / 2, left: -Math.PI / 2, uturn: Math.PI, straight: 0 }[last!.template.turn]
       : last!.kind === 'pass'
         ? lf.heading + (last!.turn * Math.PI) / 2
         : lf.heading;
@@ -420,6 +464,89 @@ function realize(placements: Placement[], seed: number): RunPlan {
   route.push(toWorld(ef, { x: laneOff(lane), z: far }));
 
   return { seed, ids: tickets.map((t) => t.id), route, finish, tickets, world };
+}
+
+/** Траєкторія учня через перехрестя в локальних координатах (поворот ліворуч або розворот). */
+function egoNodePath(t: NodeTemplate): Path {
+  const x = laneOff(t.lanes ? (t.laneIn ?? 0) : 0);
+  const corners: Corner[] =
+    t.turn === 'uturn' ? [{ x, z: -40 }, ...uTurnCorners(x), { x: -x, z: -40 }] : [{ x, z: -40 }, { x, z: O, r: R_LEFT }, { x: -40, z: O }];
+  return roundedPath(corners);
+}
+
+const egoObbAt = (path: Path, front: number, margin = 0): OBB => {
+  const p = poseOnPath(path, front - EGO_KIND.length / 2);
+  return { ...p, halfLength: EGO_KIND.length / 2 + margin, halfWidth: EGO_KIND.width / 2 + margin };
+};
+
+/** Сигнал світлофора для учня в момент рішення. */
+function lightAtDecision(t: NodeTemplate) {
+  let along = t.initial?.along ?? (t.control === 'signal' ? 'green' : 'flash');
+  for (const step of t.lights ?? []) if (step.t <= 0 && step.state.along) along = step.state.along;
+  return along;
+}
+
+/** Найближче до зустрічних смуг місце очікування: |x| від осі, куди ще не заїжджає кузов учня. */
+const WAIT_EDGE = 0.35;
+/** Далі за цю лінію (z від центру) передній бампер не виїжджає: чекають у центрі, а не за ним. */
+const WAIT_FRONT = 1;
+/** Запас між авто учня й траєкторіями учасників дорогою до місця очікування (м). */
+const WAIT_CLEARANCE = 0.4;
+/** Щонайменше на стільки метрів місце очікування має бути далі за стоп-лінію, інакше — стоп-лінія. */
+const WAIT_MIN_ADVANCE = 2;
+
+const waitCache = new Map<string, Vec2>();
+
+/**
+ * Де учень чекає в момент рішення. Повертаючи ліворуч чи розвертаючись і пропускаючи зустрічних або
+ * пішоходів, він виїжджає в центр перехрестя й чекає там (п. 16.13) — якщо в'їзд дозволено (не «STOP»,
+ * не червоний), поперечною дорогою ніхто не їде, а дорогою до центру він нікому не перетинає шлях.
+ * Інакше — стоп-лінія шаблону.
+ */
+export function waitPoint(t: NodeTemplate): Vec2 {
+  const cached = waitCache.get(t.id);
+  if (cached) return cached;
+  let point = t.stopLine;
+  const allowed = t.control !== 'stop' && (['green', 'flash'] as const).some((c) => c === lightAtDecision(t));
+  if ((t.turn === 'left' || t.turn === 'uturn') && allowed && !t.actors.some(crossTraffic)) {
+    const path = egoNodePath(t);
+    const s0 = nearestOnPath(path, t.stopLine).s;
+    const poses = t.actors.map(actorPoses);
+    let sw = s0;
+    for (let s = s0 + 0.25; s < s0 + 30; s += 0.25) {
+      const ego = egoObbAt(path, s);
+      if (obbCorners(ego).some((c) => c.x < -WAIT_EDGE) || poseOnPath(path, s).z > WAIT_FRONT) break;
+      if (!poses.every((p) => clearOf(egoObbAt(path, s, WAIT_CLEARANCE), p))) break;
+      sw = s;
+    }
+    if (sw - s0 >= WAIT_MIN_ADVANCE) point = poseOnPath(path, sw);
+  }
+  waitCache.set(t.id, point);
+  return point;
+}
+
+/** Транспорт поперечної дороги (з рукавів E і W): перед ним учень чекає на стоп-лінії. */
+function crossTraffic(a: ActorSpec): boolean {
+  if (a.parked || a.kind === 'pedestrian') return false;
+  const p = a.path[0];
+  return Math.abs(p.x) > Math.abs(p.z);
+}
+
+type ActorPoses = { kind: ActorSpec['kind']; poses: Array<{ x: number; z: number; heading: number }> };
+
+function actorPoses(a: ActorSpec): ActorPoses {
+  const ap = roundedPath(a.path, 0.5);
+  return { kind: a.kind, poses: a.parked ? [poseOnPath(ap, 0)] : ap.pts.map((pt) => poseOnPath(ap, pt.s)) };
+}
+
+/** Учасник ніде на своїй траєкторії не зачіпає авто учня в положенні ego. */
+function clearOf(ego: OBB, a: ActorPoses): boolean {
+  const k = KINDS[a.kind];
+  return a.poses.every((p) =>
+    a.kind === 'pedestrian'
+      ? !collideObbCircle(ego, { x: p.x, z: p.z, r: k.width / 2 })
+      : !collideObbObb(ego, { ...p, halfLength: k.length / 2, halfWidth: k.width / 2 }),
+  );
 }
 
 function nodeFeatures(t: NodeTemplate, own: number, cross: number) {

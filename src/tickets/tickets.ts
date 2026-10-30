@@ -2,6 +2,7 @@ import { CAR } from '../config';
 import { CW, GREEN_JUST_NOW, O, STOP, STOP_RIGHT, STOP_SIGNAL, ask, blockCrosswalk, drive, prop, walk } from './local';
 import { AVENUE } from './avenue';
 import { CYCLISTS } from './cyclists';
+import { EXTRA } from './extra';
 import { MORE } from './more';
 import type { TicketTemplate } from './types';
 
@@ -34,7 +35,7 @@ const START: TicketTemplate[] = [
       'Виїжджаючи з двору, стоянки чи іншої прилеглої території, водій повинен дати дорогу транспортним засобам і пішоходам, що рухаються дорогою. «Перешкода справа» тут не діє.',
     rule: 'ПДР, п. 10.2',
     stopLine: { x: 0, z: -6.9 },
-    actors: [{ id: 'car', kind: 'car', color: '#3b6fd8', path: [{ x: -80, z: -O }, { x: 60, z: -O }], speed: 12, gap: 22 }],
+    actors: [{ id: 'car', kind: 'car', color: '#3b6fd8', path: [{ x: -80, z: -O }, { x: 60, z: -O }], speed: 12, gap: 16 }],
   },
   {
     id: 'yard-left-far',
@@ -55,7 +56,7 @@ const START: TicketTemplate[] = [
       'Повертаючи ліворуч із прилеглої території, ви перетинаєте ближню смугу й займаєте дальню. Дати дорогу треба всім, хто рухається дорогою, — в обох напрямках.',
     rule: 'ПДР, п. 10.2',
     stopLine: { x: 0, z: -6.9 },
-    actors: [{ id: 'car', kind: 'car', color: '#c0392b', path: [{ x: 65, z: O }, { x: -45, z: O }], speed: 11, gap: 20 }],
+    actors: [{ id: 'car', kind: 'car', color: '#c0392b', path: [{ x: 65, z: O }, { x: -45, z: O }], speed: 11, gap: 14 }],
   },
   {
     id: 'yard-left-near',
@@ -76,7 +77,7 @@ const START: TicketTemplate[] = [
       'Щоб потрапити на дальню смугу, ви перетинаєте ближню — і на ній опиняєтеся на шляху автомобіля. Виїжджаючи з прилеглої території, дорогу дають усім учасникам руху на дорозі.',
     rule: 'ПДР, п. 10.2',
     stopLine: { x: 0, z: -6.9 },
-    actors: [{ id: 'car', kind: 'car', color: '#2f9e6e', path: [{ x: -80, z: -O }, { x: 60, z: -O }], speed: 12, gap: 22 }],
+    actors: [{ id: 'car', kind: 'car', color: '#2f9e6e', path: [{ x: -80, z: -O }, { x: 60, z: -O }], speed: 12, gap: 16 }],
   },
   {
     id: 'yard-pedestrian',
@@ -116,7 +117,7 @@ const EQUAL: TicketTemplate[] = [
       'На перехресті рівнозначних доріг водій повинен дати дорогу транспортним засобам, що наближаються справа («перешкода справа»).',
     rule: 'ПДР, п. 16.12',
     stopLine: STOP,
-    actors: [{ id: 'car', kind: 'car', color: '#f2c14e', path: drive('E', 'W'), speed: 9, gap: 18 }],
+    actors: [{ id: 'car', kind: 'car', color: '#f2c14e', path: drive('E', 'W'), speed: 9, gap: 12 }],
   },
   {
     id: 'equal-left-oncoming',
@@ -138,7 +139,7 @@ const EQUAL: TicketTemplate[] = [
       'Перед поворотом ліворуч на перехресті рівнозначних доріг водій повинен дати дорогу транспортним засобам, що рухаються в зустрічному напрямку прямо або праворуч.',
     rule: 'ПДР, п. 16.13',
     stopLine: STOP,
-    actors: [{ id: 'car', kind: 'car', color: '#e8eef0', path: drive('N', 'S'), speed: 10, gap: 25 }],
+    actors: [{ id: 'car', kind: 'car', color: '#e8eef0', path: drive('N', 'S'), speed: 10, gap: 13 }],
   },
   {
     id: 'equal-left-oncoming-right-turn',
@@ -160,7 +161,7 @@ const EQUAL: TicketTemplate[] = [
       'Повертаючи ліворуч, водій поступається зустрічним, які їдуть прямо або праворуч. Зустрічний, що повертає праворуч, займає ту саму смугу, куди прямуєте ви.',
     rule: 'ПДР, п. 16.13',
     stopLine: STOP,
-    actors: [{ id: 'car', kind: 'car', color: '#16a3b8', path: drive('N', 'W'), speed: 7, gap: 14 }],
+    actors: [{ id: 'car', kind: 'car', color: '#16a3b8', path: drive('N', 'W'), speed: 7, gap: 9 }],
   },
   {
     id: 'equal-right-turn-ped',
@@ -201,7 +202,7 @@ const EQUAL: TicketTemplate[] = [
       2,
     ),
     explanation:
-      'Пішоходи, які переходять дорогу, на яку ви повертаєте, мають перевагу. Зупинитися «посеред повороту» — означає заблокувати перехрестя; дочекайтеся, поки пішохід перейде.',
+      'Пішоходи, які переходять дорогу, на яку ви повертаєте, мають перевагу. Чекають на них у центрі перехрестя, перед переходом, а не на самому переході «посеред повороту».',
     rule: 'ПДР, п. 16.2',
     stopLine: STOP,
     crosswalks: [{ x: -CW, z: 0, acrossEgoRoad: false }],
@@ -227,7 +228,7 @@ const EQUAL: TicketTemplate[] = [
       'Транспортному засобу з увімкненими синім проблисковим маячком і спеціальним звуковим сигналом дають дорогу всі — незалежно від правил проїзду перехресть.',
     rule: 'ПДР, п. 3.2',
     stopLine: STOP,
-    actors: [{ id: 'ambulance', kind: 'ambulance', path: drive('W', 'E'), speed: 13, gap: 30, siren: true }],
+    actors: [{ id: 'ambulance', kind: 'ambulance', path: drive('W', 'E'), speed: 13, gap: 17, siren: true }],
   },
   {
     id: 'equal-left-car-right',
@@ -249,7 +250,7 @@ const EQUAL: TicketTemplate[] = [
       'Правило «перешкоди справа» діє для будь-якого маневру на перехресті рівнозначних доріг: і прямо, і в поворотах.',
     rule: 'ПДР, п. 16.12',
     stopLine: STOP,
-    actors: [{ id: 'car', kind: 'car', color: '#9b59b6', path: drive('E', 'W'), speed: 9, gap: 18 }],
+    actors: [{ id: 'car', kind: 'car', color: '#9b59b6', path: drive('E', 'W'), speed: 9, gap: 12 }],
   },
   {
     id: 'equal-merge-right-turner',
@@ -271,7 +272,7 @@ const EQUAL: TicketTemplate[] = [
       'Автомобіль справа після повороту займе вашу смугу — траєкторії зливаються. На рівнозначних дорогах перевагу має той, хто справа, незалежно від напрямку його руху.',
     rule: 'ПДР, п. 16.12',
     stopLine: STOP,
-    actors: [{ id: 'car', kind: 'car', color: '#e4572e', path: drive('E', 'N'), speed: 7, gap: 13 }],
+    actors: [{ id: 'car', kind: 'car', color: '#e4572e', path: drive('E', 'N'), speed: 7, gap: 9 }],
   },
   {
     id: 'equal-bus-right',
@@ -292,7 +293,7 @@ const EQUAL: TicketTemplate[] = [
       'Тип транспортного засобу значення не має: на рівнозначному перехресті поступаються тому, хто справа. «Встигну» — не правило, а ризик.',
     rule: 'ПДР, п. 16.12',
     stopLine: STOP,
-    actors: [{ id: 'bus', kind: 'bus', path: drive('E', 'W'), speed: 8, gap: 20 }],
+    actors: [{ id: 'bus', kind: 'bus', path: drive('E', 'W'), speed: 8, gap: 10 }],
   },
   {
     id: 'equal-both-left',
@@ -314,7 +315,7 @@ const EQUAL: TicketTemplate[] = [
       'Траєкторії двох лівих поворотів із сусідніх доріг перетинаються в центрі перехрестя. На рівнозначних дорогах першим проїжджає той, хто справа.',
     rule: 'ПДР, п. 16.12',
     stopLine: STOP,
-    actors: [{ id: 'car', kind: 'car', color: '#3b6fd8', path: drive('E', 'S'), speed: 7, gap: 14 }],
+    actors: [{ id: 'car', kind: 'car', color: '#3b6fd8', path: drive('E', 'S'), speed: 7, gap: 9 }],
   },
   {
     id: 'equal-ambulance-oncoming-left',
@@ -336,7 +337,7 @@ const EQUAL: TicketTemplate[] = [
       'Без спецсигналів зустрічний, що повертає ліворуч, поступився б вам. Але з увімкненими маячком і сиреною швидка має перевагу — їй дають дорогу.',
     rule: 'ПДР, п. 3.2',
     stopLine: STOP,
-    actors: [{ id: 'ambulance', kind: 'ambulance', path: drive('N', 'E'), speed: 8, gap: 16, siren: true }],
+    actors: [{ id: 'ambulance', kind: 'ambulance', path: drive('N', 'E'), speed: 8, gap: 10, siren: true }],
   },
 ];
 
@@ -363,7 +364,7 @@ const PRIORITY: TicketTemplate[] = [
       'Знак «Дати дорогу» означає, що ви на другорядній дорозі. Водій на другорядній дорозі повинен дати дорогу всім, хто наближається перехрестям головною, незалежно від напрямку їхнього руху. «Перешкода справа» діє лише на рівнозначних дорогах.',
     rule: 'ПДР, п. 16.11',
     stopLine: STOP,
-    actors: [{ id: 'car', kind: 'car', color: '#2f9e6e', path: drive('W', 'E'), speed: 11, gap: 18 }],
+    actors: [{ id: 'car', kind: 'car', color: '#2f9e6e', path: drive('W', 'E'), speed: 11, gap: 14 }],
   },
   {
     id: 'giveway-straight-right',
@@ -383,7 +384,7 @@ const PRIORITY: TicketTemplate[] = [
     explanation: 'На перехресті нерівнозначних доріг водій на другорядній дорозі дає дорогу всім, хто рухається головною.',
     rule: 'ПДР, п. 16.11',
     stopLine: STOP,
-    actors: [{ id: 'car', kind: 'car', color: '#c0392b', path: drive('E', 'W'), speed: 11, gap: 20 }],
+    actors: [{ id: 'car', kind: 'car', color: '#c0392b', path: drive('E', 'W'), speed: 11, gap: 14 }],
   },
   {
     id: 'giveway-right-car-left',
@@ -405,7 +406,7 @@ const PRIORITY: TicketTemplate[] = [
       'Після правого повороту ви опинитеся саме в тій смузі, якою їде автомобіль на головній. Знак «Дати дорогу» зобов\'язує пропустити його.',
     rule: 'ПДР, п. 16.11',
     stopLine: STOP_RIGHT,
-    actors: [{ id: 'car', kind: 'car', color: '#f2c14e', path: drive('W', 'E'), speed: 11, gap: 22 }],
+    actors: [{ id: 'car', kind: 'car', color: '#f2c14e', path: drive('W', 'E'), speed: 11, gap: 14 }],
   },
   {
     id: 'giveway-left-car-right',
@@ -426,7 +427,7 @@ const PRIORITY: TicketTemplate[] = [
       'Поворот ліворуч перетинає обидві смуги головної дороги. Водій на другорядній поступається транспорту головної дороги з будь-якого боку.',
     rule: 'ПДР, п. 16.11',
     stopLine: STOP,
-    actors: [{ id: 'car', kind: 'car', color: '#3f4a52', path: drive('E', 'W'), speed: 11, gap: 18 }],
+    actors: [{ id: 'car', kind: 'car', color: '#3f4a52', path: drive('E', 'W'), speed: 11, gap: 14 }],
   },
   {
     id: 'giveway-straight-left',
@@ -447,7 +448,7 @@ const PRIORITY: TicketTemplate[] = [
       'Знак «Дати дорогу» діє на всі напрямки руху з другорядної дороги. «Перешкода справа» тут не застосовується — дороги нерівнозначні.',
     rule: 'ПДР, п. 16.11',
     stopLine: STOP,
-    actors: [{ id: 'car', kind: 'car', color: '#e8eef0', path: drive('W', 'E'), speed: 11, gap: 18 }],
+    actors: [{ id: 'car', kind: 'car', color: '#e8eef0', path: drive('W', 'E'), speed: 11, gap: 14 }],
   },
   {
     id: 'stop-right-car-left',
@@ -469,7 +470,7 @@ const PRIORITY: TicketTemplate[] = [
       'Знак «STOP» вимагає зупинитися перед стоп-лінією і дати дорогу транспорту, що рухається перехрещуваною дорогою. Сама зупинка права проїзду не дає.',
     rule: 'ПДР, п. 16.11; знак 2.2',
     stopLine: STOP_RIGHT,
-    actors: [{ id: 'car', kind: 'car', color: '#2f5f9b', path: drive('W', 'E'), speed: 11, gap: 22 }],
+    actors: [{ id: 'car', kind: 'car', color: '#2f5f9b', path: drive('W', 'E'), speed: 11, gap: 14 }],
   },
   {
     id: 'stop-straight-right',
@@ -489,7 +490,7 @@ const PRIORITY: TicketTemplate[] = [
     explanation: 'Після обов\'язкової зупинки за знаком 2.2 треба ще й дати дорогу всім, хто рухається головною.',
     rule: 'ПДР, п. 16.11; знак 2.2',
     stopLine: STOP,
-    actors: [{ id: 'car', kind: 'car', color: '#6c8f5a', path: drive('E', 'W'), speed: 11, gap: 20 }],
+    actors: [{ id: 'car', kind: 'car', color: '#6c8f5a', path: drive('E', 'W'), speed: 11, gap: 14 }],
   },
   {
     id: 'stop-straight-bus-left',
@@ -510,7 +511,7 @@ const PRIORITY: TicketTemplate[] = [
       'На другорядній дорозі поступаються всім на головній, хоч би якими повільними вони здавалися. Довгий автобус займає перехрестя довше, ніж здається.',
     rule: 'ПДР, п. 16.11; знак 2.2',
     stopLine: STOP,
-    actors: [{ id: 'bus', kind: 'bus', path: drive('W', 'E'), speed: 9, gap: 22 }],
+    actors: [{ id: 'bus', kind: 'bus', path: drive('W', 'E'), speed: 9, gap: 12 }],
   },
   {
     id: 'giveway-right-turn-ped',
@@ -555,7 +556,7 @@ const PRIORITY: TicketTemplate[] = [
       'Водії, які рухаються однією дорогою (обидва другорядною), між собою керуються правилами рівнозначних доріг: повертаючи ліворуч, поступаються зустрічним, що їдуть прямо або праворуч.',
     rule: 'ПДР, пп. 16.11, 16.13',
     stopLine: STOP,
-    actors: [{ id: 'car', kind: 'car', color: '#55606a', path: drive('N', 'S'), speed: 10, gap: 24 }],
+    actors: [{ id: 'car', kind: 'car', color: '#55606a', path: drive('N', 'S'), speed: 10, gap: 13 }],
   },
   {
     id: 'main-left-oncoming',
@@ -577,7 +578,7 @@ const PRIORITY: TicketTemplate[] = [
       'Знак «Головна дорога» дає перевагу перед другорядною, але не перед зустрічними на тій самій головній. Між собою вони роз\'їжджаються як на рівнозначних: лівий поворот поступається зустрічним.',
     rule: 'ПДР, пп. 16.11, 16.13',
     stopLine: STOP,
-    actors: [{ id: 'car', kind: 'car', color: '#9b2f2f', path: drive('N', 'S'), speed: 11, gap: 26 }],
+    actors: [{ id: 'car', kind: 'car', color: '#9b2f2f', path: drive('N', 'S'), speed: 11, gap: 14 }],
   },
   {
     id: 'main-ambulance',
@@ -599,7 +600,7 @@ const PRIORITY: TicketTemplate[] = [
       'Перевага головної дороги не діє проти транспорту з увімкненими синім маячком і сиреною — йому дають дорогу всі.',
     rule: 'ПДР, п. 3.2',
     stopLine: STOP,
-    actors: [{ id: 'ambulance', kind: 'ambulance', path: drive('E', 'W'), speed: 13, gap: 28, siren: true }],
+    actors: [{ id: 'ambulance', kind: 'ambulance', path: drive('E', 'W'), speed: 13, gap: 17, siren: true }],
   },
   {
     id: 'main-right-turn-ped',
@@ -648,7 +649,7 @@ const SIGNAL: TicketTemplate[] = [
       'Повертаючи ліворуч або розвертаючись на зелений сигнал, водій повинен дати дорогу зустрічним транспортним засобам, що рухаються прямо або праворуч. Зелений дозволяє рух, але не дає переваги над зустрічними.',
     rule: 'ПДР, п. 16.6',
     stopLine: STOP_SIGNAL,
-    actors: [{ id: 'car', kind: 'car', color: '#e8eef0', path: drive('N', 'S'), speed: 11, gap: 30 }],
+    actors: [{ id: 'car', kind: 'car', color: '#e8eef0', path: drive('N', 'S'), speed: 11, gap: 14 }],
   },
   {
     id: 'signal-left-oncoming-right-turn',
@@ -670,7 +671,7 @@ const SIGNAL: TicketTemplate[] = [
       'На зелений сигнал, повертаючи ліворуч, дають дорогу зустрічним, що рухаються прямо або праворуч. Ви обидва в\'їжджаєте на одну дорогу — першим праворуч повертає зустрічний.',
     rule: 'ПДР, п. 16.6',
     stopLine: STOP_SIGNAL,
-    actors: [{ id: 'car', kind: 'car', color: '#2f9e6e', path: drive('N', 'W'), speed: 7, gap: 16 }],
+    actors: [{ id: 'car', kind: 'car', color: '#2f9e6e', path: drive('N', 'W'), speed: 7, gap: 9 }],
   },
   {
     id: 'signal-right-turn-ped',
@@ -732,7 +733,7 @@ const SIGNAL: TicketTemplate[] = [
     rule: 'ПДР, п. 16.9',
     stopLine: STOP_SIGNAL,
     ...GREEN_JUST_NOW,
-    actors: [{ id: 'bus', kind: 'bus', path: drive('E', 'W'), speed: 3.5, gap: 7 }],
+    actors: [{ id: 'bus', kind: 'bus', path: drive('E', 'W'), speed: 3.5, gap: 5 }],
   },
   {
     id: 'signal-clearing-ped',
@@ -778,7 +779,7 @@ const SIGNAL: TicketTemplate[] = [
     rule: 'ПДР, п. 16.9',
     stopLine: STOP_SIGNAL,
     ...GREEN_JUST_NOW,
-    actors: [{ id: 'car', kind: 'car', color: '#c9d1d6', path: drive('E', 'S'), speed: 4.5, gap: 7 }],
+    actors: [{ id: 'car', kind: 'car', color: '#c9d1d6', path: drive('E', 'S'), speed: 4.5, gap: 6 }],
   },
   {
     id: 'signal-ambulance',
@@ -792,7 +793,7 @@ const SIGNAL: TicketTemplate[] = [
       'Якщо наближається транспортний засіб з увімкненими синім проблисковим маячком і спеціальним звуковим сигналом, водії повинні дати йому дорогу й забезпечити безперешкодний проїзд — навіть на зелений сигнал.',
     rule: 'ПДР, п. 3.2',
     stopLine: STOP_SIGNAL,
-    actors: [{ id: 'ambulance', kind: 'ambulance', path: drive('E', 'W'), speed: 14, gap: 30, siren: true }],
+    actors: [{ id: 'ambulance', kind: 'ambulance', path: drive('E', 'W'), speed: 14, gap: 18, siren: true }],
   },
   {
     id: 'signal-red-runner',
@@ -814,7 +815,7 @@ const SIGNAL: TicketTemplate[] = [
       'Зелений дає право руху, але не звільняє від обов\'язку стежити за обстановкою. Побачивши небезпеку, водій повинен зменшити швидкість аж до зупинки.',
     rule: 'ПДР, пп. 2.3 «б», 12.3',
     stopLine: STOP_SIGNAL,
-    actors: [{ id: 'car', kind: 'car', color: '#1f2326', path: drive('W', 'E'), speed: 13, gap: 26 }],
+    actors: [{ id: 'car', kind: 'car', color: '#1f2326', path: drive('W', 'E'), speed: 13, gap: 17 }],
   },
   {
     id: 'signal-flash-giveway',
@@ -836,7 +837,7 @@ const SIGNAL: TicketTemplate[] = [
       'Миготливий жовтий дозволяє рух і попереджає, що перехрестя нерегульоване. Тоді діють знаки пріоритету: зі знаком «Дати дорогу» ви поступаєтеся транспорту на головній.',
     rule: 'ПДР, пп. 8.7.3, 16.11',
     stopLine: STOP_SIGNAL,
-    actors: [{ id: 'car', kind: 'car', color: '#2f5f9b', path: drive('E', 'W'), speed: 11, gap: 20 }],
+    actors: [{ id: 'car', kind: 'car', color: '#2f5f9b', path: drive('E', 'W'), speed: 11, gap: 14 }],
   },
   {
     id: 'signal-flash-equal',
@@ -858,7 +859,7 @@ const SIGNAL: TicketTemplate[] = [
       'Миготливий жовтий означає нерегульоване перехрестя. Без знаків пріоритету дороги рівнозначні — дорогу дають тим, хто справа.',
     rule: 'ПДР, пп. 8.7.3, 16.12',
     stopLine: STOP_SIGNAL,
-    actors: [{ id: 'car', kind: 'car', color: '#e8e2d4', path: drive('E', 'W'), speed: 9, gap: 18 }],
+    actors: [{ id: 'car', kind: 'car', color: '#e8e2d4', path: drive('E', 'W'), speed: 9, gap: 12 }],
   },
   {
     id: 'signal-left-oncoming-bus',
@@ -879,7 +880,7 @@ const SIGNAL: TicketTemplate[] = [
       'На зелений, повертаючи ліворуч, дають дорогу всім зустрічним, що рухаються прямо або праворуч, — будь-якого розміру. Довжину й швидкість автобуса легко недооцінити.',
     rule: 'ПДР, п. 16.6',
     stopLine: STOP_SIGNAL,
-    actors: [{ id: 'bus', kind: 'bus', path: drive('N', 'S'), speed: 9, gap: 30 }],
+    actors: [{ id: 'bus', kind: 'bus', path: drive('N', 'S'), speed: 9, gap: 12 }],
   },
 ];
 
@@ -996,7 +997,7 @@ const BLOCK: TicketTemplate[] = [
     props: [prop('triangle', 2.7, 3.2)],
     actors: [
       { id: 'van', kind: 'car', model: 'van', color: '#e8e2d4', parked: true, hazard: true, path: [{ x: O, z: 8 }, { x: O, z: 9 }], speed: 0, gap: 0 },
-      { id: 'car', kind: 'car', color: '#2f5f9b', path: [{ x: -O, z: 42 }, { x: -O, z: -42 }], speed: 10, gap: 25 },
+      { id: 'car', kind: 'car', color: '#2f5f9b', path: [{ x: -O, z: 42 }, { x: -O, z: -42 }], speed: 10, gap: 13 },
     ],
   },
   {
@@ -1035,7 +1036,7 @@ const BLOCK: TicketTemplate[] = [
       prop('cone', 0.5, 13.5),
       prop('barrier', 1.9, 16.5, Math.PI / 2),
     ],
-    actors: [{ id: 'car', kind: 'car', color: '#9b2f2f', path: [{ x: -O, z: 42 }, { x: -O, z: -42 }], speed: 10, gap: 26 }],
+    actors: [{ id: 'car', kind: 'car', color: '#9b2f2f', path: [{ x: -O, z: 42 }, { x: -O, z: -42 }], speed: 10, gap: 13 }],
   },
   {
     id: 'bus-stop-pedestrian',
@@ -1133,7 +1134,7 @@ const BLOCK: TicketTemplate[] = [
 ];
 
 /** Усі білети. Генератор маршруту обирає з них і розставляє містом. */
-export const TICKETS: TicketTemplate[] = [...START, ...EQUAL, ...PRIORITY, ...SIGNAL, ...BLOCK, ...CYCLISTS, ...MORE, ...AVENUE];
+export const TICKETS: TicketTemplate[] = [...START, ...EQUAL, ...PRIORITY, ...SIGNAL, ...BLOCK, ...CYCLISTS, ...MORE, ...AVENUE, ...EXTRA];
 
 /** Центр авто, коли передній бампер на лінії — використовується в тестах і для камери. */
 export const EGO_HALF_LENGTH = CAR.length / 2;
