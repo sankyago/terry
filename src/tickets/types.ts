@@ -67,7 +67,8 @@ export interface Ticket {
 // повертає й переносить шаблон у потрібне місце міста.
 
 export type Arm = 'N' | 'E' | 'S' | 'W';
-export type Turn = 'straight' | 'left' | 'right';
+/** uturn — розворот на перехресті. */
+export type Turn = 'straight' | 'left' | 'right' | 'uturn';
 
 /**
  * equal — рівнозначні дороги; giveWay / stop — учень на другорядній; main — учень на головній;

@@ -44,7 +44,7 @@ export const CYCLISTS: TicketTemplate[] = [
         // Після виїзду з двору звертає на тротуар, щоб не їхати попереду учня.
         path: [{ x: -80, z: -EDGE }, { x: 12, z: -EDGE, r: 3 }, { x: 15, z: -5, r: 3 }, { x: 45, z: -5 }],
         speed: 5,
-        gap: 10,
+        gap: 7,
       },
     ],
   },
@@ -67,7 +67,7 @@ export const CYCLISTS: TicketTemplate[] = [
       'Велосипедист — водій транспортного засобу, і правило «перешкоди справа» діє і щодо нього. На рівнозначному перехресті дорогу дають тим, хто справа.',
     rule: 'ПДР, п. 16.12',
     stopLine: STOP,
-    actors: [{ id: 'bike', kind: 'cyclist', color: '#3b6fd8', path: drive('E', 'W', { offIn: EDGE }), speed: 5, gap: 10 }],
+    actors: [{ id: 'bike', kind: 'cyclist', color: '#3b6fd8', path: drive('E', 'W', { offIn: EDGE }), speed: 5, gap: 6 }],
   },
   {
     id: 'equal-left-cyclist-oncoming',
@@ -88,7 +88,7 @@ export const CYCLISTS: TicketTemplate[] = [
       'Повертаючи ліворуч, дають дорогу зустрічним, що рухаються прямо або праворуч, — зокрема велосипедистам. Швидкість велосипеда легко недооцінити.',
     rule: 'ПДР, п. 16.13',
     stopLine: STOP,
-    actors: [{ id: 'bike', kind: 'cyclist', color: '#f2c14e', path: drive('N', 'S', { offIn: EDGE }), speed: 5.5, gap: 15 }],
+    actors: [{ id: 'bike', kind: 'cyclist', color: '#f2c14e', path: drive('N', 'S', { offIn: EDGE }), speed: 5.5, gap: 7 }],
   },
   {
     id: 'equal-right-bikepath',
@@ -112,7 +112,7 @@ export const CYCLISTS: TicketTemplate[] = [
     stopLine: STOP_RIGHT,
     bikePaths: bikeAlong(BIKE),
     signs: [{ kind: 'bikePath', x: HW + 3.8, z: -16, facing: 0 }],
-    actors: [{ id: 'bike', kind: 'cyclist', color: '#16a3b8', path: [{ x: BIKE, z: -60 }, { x: BIKE, z: 45 }], speed: 5, gap: 9 }],
+    actors: [{ id: 'bike', kind: 'cyclist', color: '#16a3b8', path: [{ x: BIKE, z: -60 }, { x: BIKE, z: 45 }], speed: 5, gap: 6 }],
   },
   {
     id: 'signal-right-bikepath',
@@ -136,7 +136,7 @@ export const CYCLISTS: TicketTemplate[] = [
     stopLine: STOP_SIGNAL,
     bikePaths: bikeAlong(BIKE_SIGNAL, -30, 30),
     actors: [
-      { id: 'bike', kind: 'cyclist', color: '#9b59b6', path: [{ x: BIKE_SIGNAL, z: -34 }, { x: BIKE_SIGNAL, z: 30 }], speed: 5, gap: 9 },
+      { id: 'bike', kind: 'cyclist', color: '#9b59b6', path: [{ x: BIKE_SIGNAL, z: -34 }, { x: BIKE_SIGNAL, z: 30 }], speed: 5, gap: 6 },
     ],
   },
   {
@@ -158,7 +158,7 @@ export const CYCLISTS: TicketTemplate[] = [
       'На зелений, повертаючи ліворуч, дають дорогу зустрічним транспортним засобам, що рухаються прямо або праворуч. Велосипед — теж транспортний засіб.',
     rule: 'ПДР, п. 16.6',
     stopLine: STOP_SIGNAL,
-    actors: [{ id: 'bike', kind: 'cyclist', color: '#e4572e', path: drive('N', 'S', { offIn: EDGE }), speed: 5.5, gap: 18 }],
+    actors: [{ id: 'bike', kind: 'cyclist', color: '#e4572e', path: drive('N', 'S', { offIn: EDGE }), speed: 5.5, gap: 7 }],
   },
   {
     id: 'giveway-cyclist-left',
@@ -179,7 +179,7 @@ export const CYCLISTS: TicketTemplate[] = [
       'Водій на другорядній дорозі дає дорогу всім транспортним засобам на головній — незалежно від напрямку їх руху й того, чи це автомобіль, чи велосипед.',
     rule: 'ПДР, п. 16.11',
     stopLine: STOP,
-    actors: [{ id: 'bike', kind: 'cyclist', color: '#2f9e6e', path: drive('W', 'E', { offIn: EDGE }), speed: 5.5, gap: 12 }],
+    actors: [{ id: 'bike', kind: 'cyclist', color: '#2f9e6e', path: drive('W', 'E', { offIn: EDGE }), speed: 5.5, gap: 7 }],
   },
   {
     id: 'cyclist-crosswalk-ride',

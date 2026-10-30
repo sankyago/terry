@@ -3,8 +3,9 @@ import { SIM_DT } from '../src/config';
 import type { SimEvent } from '../src/sim/sim';
 import { Sim } from '../src/sim/sim';
 import type { RunPlan } from '../src/tickets/plan';
-import { RUN_SIZE, createRunPlan, drawTickets, planFor, withInnocent } from '../src/tickets/plan';
+import { RUN_SIZE, createRunPlan, drawTickets, planFor, waitPoint, withInnocent } from '../src/tickets/plan';
 import { TICKETS } from '../src/tickets/tickets';
+import type { NodeTemplate } from '../src/tickets/types';
 import { seededRandom } from '../src/sim/random';
 import { curvatureAt } from '../src/sim/path';
 
@@ -49,10 +50,37 @@ function cleanRun(plan: RunPlan) {
 }
 
 describe('банк білетів', () => {
-  it('100 білетів з унікальними id і рівно однією правильною відповіддю', () => {
-    expect(TICKETS.length).toBe(100);
+  it('150 білетів з унікальними id і рівно однією правильною відповіддю', () => {
+    expect(TICKETS.length).toBe(150);
     expect(new Set(TICKETS.map((t) => t.id)).size).toBe(TICKETS.length);
     for (const t of TICKETS) expect(t.options.filter((o) => o.correct).length, t.id).toBe(1);
+  });
+});
+
+describe('момент рішення', () => {
+  const node = (id: string) => TICKETS.find((t) => t.id === id) as NodeTemplate;
+
+  it('ліворуч і розворот, пропускаючи зустрічних, учень чекає в центрі перехрестя', () => {
+    for (const id of ['equal-left-oncoming', 'signal-left-oncoming', 'main-left-ped', 'avenue-left-oncoming-far-lane', 'uturn-signal-oncoming']) {
+      const w = waitPoint(node(id));
+      expect(w.z, id).toBeGreaterThan(-1.5);
+      expect(w.x, id).toBeGreaterThan(-0.35);
+    }
+  });
+
+  it('перед транспортом поперечної дороги, на «STOP» і на червоний — на стоп-лінії', () => {
+    for (const id of ['equal-left-car-right', 'giveway-left-car-left', 'stop-left-car-left', 'uturn-equal-right', 'signal-flash-equal'])
+      expect(waitPoint(node(id)), id).toBe(node(id).stopLine);
+  });
+
+  it('транспорт у момент рішення поруч із точкою конфлікту, а не за кадром', () => {
+    // Другі в черзі навмисно далі: їх видно, але вони під'їдуть пізніше.
+    const second = new Set(['signal-left-oncoming-two:car2', 'giveway-straight-two:right', 'yard-left-two-cars:far']);
+    for (const t of TICKETS)
+      for (const a of t.actors) {
+        if (a.parked || a.kind === 'pedestrian' || second.has(`${t.id}:${a.id}`)) continue;
+        expect(a.gap, `${t.id}:${a.id}`).toBeLessThanOrEqual(18);
+      }
   });
 });
 
@@ -74,9 +102,9 @@ describe('генератор маршруту', () => {
     expect(a).not.toBe(b);
   });
 
-  it('спершу видає ще не бачені білети: за 5 заїздів — усі 100', () => {
+  it('спершу видає ще не бачені білети: за 9 заїздів — усі 150 (виїздів із двору 9, а в заїзді — щонайбільше один)', () => {
     const seen = new Set<string>();
-    for (let k = 0; k < 5; k++) for (const id of createRunPlan(100 + k, seen).ids) seen.add(id);
+    for (let k = 0; k < 9; k++) for (const id of createRunPlan(100 + k, seen).ids) seen.add(id);
     expect(seen.size).toBe(TICKETS.length);
   });
 

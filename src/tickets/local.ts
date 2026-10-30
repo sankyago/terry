@@ -39,7 +39,34 @@ export const H: Record<Arm, number> = { N: 0, E: Math.PI / 2, S: Math.PI, W: -Ma
 const OPPOSITE: Record<Arm, Arm> = { N: 'S', S: 'N', E: 'W', W: 'E' };
 
 /** Рукав, на який виїжджає учень після маневру. */
-export const exitArm = (turn: Turn): Arm => (turn === 'straight' ? 'N' : turn === 'right' ? 'E' : 'W');
+export const exitArm = (turn: Turn): Arm => (turn === 'straight' ? 'N' : turn === 'right' ? 'E' : turn === 'left' ? 'W' : 'S');
+
+/** Радіус дуг розвороту: найменший, з яким траєкторія ще плавна. */
+export const R_UTURN = 4;
+
+/**
+ * Кути траєкторії розвороту на перехресті зі смуги x у зустрічну (−x) — «крапля»: трохи праворуч,
+ * велика петля ліворуч навколо центру перехрестя і знову праворуч. Уся петля — в межах перехрестя
+ * й рукавів, без заїзду на тротуари. Після розвороту учень їде на південь.
+ */
+export function uTurnCorners(x: number = O): Corner[] {
+  const r = R_UTURN;
+  // Кут бічних дуг: кінець петлі має припасти на смугу −x (центр петлі — на осі дороги).
+  const phi = Math.acos((2 * r + 2 * x) / (4 * r));
+  const turns = [phi, ...Array<number>(3).fill(-(Math.PI + 2 * phi) / 3), phi];
+  const corners: Corner[] = [];
+  let p = { x, z: -2 * r * Math.sin(phi) };
+  let heading = 0;
+  let back = 0;
+  for (const a of turns) {
+    const t = r * Math.tan(Math.abs(a) / 2);
+    p = { x: p.x + Math.sin(heading) * (back + t), z: p.z + Math.cos(heading) * (back + t) };
+    corners.push({ ...p, r });
+    heading += a;
+    back = t;
+  }
+  return corners;
+}
 
 /** Точка смуги, що веде до перехрестя з рукава arm, на відстані d від центру; off — зсув смуги від осі. */
 function inLane(arm: Arm, d: number, off: number = O): Vec2 {
