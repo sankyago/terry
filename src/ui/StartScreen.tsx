@@ -1,7 +1,7 @@
 import type { Mode, Progress, QualitySetting, Settings } from '../storage/storage';
 import { EXAM_MAX_MISTAKES } from '../storage/storage';
 import { RUN_SIZE } from '../tickets/plan';
-import { TICKETS } from '../tickets/tickets';
+import { DIFFICULTIES, ticketsForDifficulty } from '../tickets/tickets';
 import { SoundOffIcon, SoundOnIcon } from './icons';
 
 interface Props {
@@ -26,6 +26,7 @@ const MODES: Array<{ id: Mode; title: string; text: string }> = [
 
 export function StartScreen({ settings, progress, onChange, onStart }: Props) {
   const p = progress[settings.mode];
+  const pool = ticketsForDifficulty(settings.difficulty);
   return (
     <div className="overlay start">
       <div className="glass card start-card scrollable">
@@ -46,7 +47,7 @@ export function StartScreen({ settings, progress, onChange, onStart }: Props) {
 
         <section className="exercise">
           <span className="eyebrow">
-            Маршрут містом · {RUN_SIZE} ситуацій із {TICKETS.length}
+            Маршрут містом · {RUN_SIZE} ситуацій із {pool.length}
           </span>
           <h2>Ви керуєте рішеннями, а не кермом</h2>
           <p className="muted small">
@@ -69,6 +70,26 @@ export function StartScreen({ settings, progress, onChange, onStart }: Props) {
           ))}
         </div>
         <p className="muted small mode-text">{MODES.find((m) => m.id === settings.mode)!.text}</p>
+
+        <div className="difficulty-picker">
+          <span className="eyebrow" id="difficulty-label">Складність</span>
+          <div className="segmented difficulty-levels" role="radiogroup" aria-labelledby="difficulty-label" aria-describedby="difficulty-description">
+            {DIFFICULTIES.map((level) => (
+              <button
+                key={level.id}
+                role="radio"
+                aria-checked={settings.difficulty === level.id}
+                className={settings.difficulty === level.id ? 'active' : ''}
+                onClick={() => onChange({ difficulty: level.id })}
+              >
+                {level.title}
+              </button>
+            ))}
+          </div>
+          <p className="muted small" id="difficulty-description">
+            {DIFFICULTIES.find((level) => level.id === settings.difficulty)!.text}
+          </p>
+        </div>
 
         <button className="primary big" onClick={() => onStart(settings.mode)}>
           Почати маршрут

@@ -35,8 +35,17 @@ describe('результати й прогрес', () => {
   it('round-trip налаштувань', () => {
     const s = mem();
     const d = load(s);
-    save({ ...d, settings: { ...d.settings, sound: false, mode: 'exam', camera: 'north' } }, s);
-    expect(load(s).settings).toMatchObject({ sound: false, mode: 'exam', camera: 'north' });
+    save({ ...d, settings: { ...d.settings, difficulty: 'hard', sound: false, mode: 'exam', camera: 'north' } }, s);
+    expect(load(s).settings).toMatchObject({ difficulty: 'hard', sound: false, mode: 'exam', camera: 'north' });
+  });
+
+  it('старі налаштування й невідома складність безпечно отримують середній рівень', () => {
+    for (const difficulty of [undefined, null, 'expert', 3]) {
+      const s = mem();
+      s.setItem('cruise.v2', JSON.stringify({ settings: { mode: 'exam', difficulty }, progress: { seen: ['equal-right'] } }));
+      expect(load(s).settings).toMatchObject({ mode: 'exam', difficulty: 'medium' });
+      expect(load(s).progress.seen).toEqual(['equal-right']);
+    }
   });
 
   it('колода бачених білетів починається заново, коли бачено всі', () => {

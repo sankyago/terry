@@ -11,9 +11,10 @@ at each situation the world pauses and the player answers a ticket. A wrong answ
 
 ## Layout
 
-- `src/tickets/tickets.ts` — the bank of ticket templates (150) in local coordinates (ego approaches from the south, +X = right):
+- `src/tickets/tickets.ts` — the bank of ticket templates (250: 50 easy, 100 medium, 100 hard) in local coordinates (ego approaches from the south, +X = right):
   question, options, explanation, ПДР rule, stop line, actors, signs, props, bike paths, light scripts. More templates in
-  `cyclists.ts`, `more.ts`, `avenue.ts`, `extra.ts`; helpers (`ask`, `drive`, `walk`, stop lines, lanes, `uTurnCorners`) in `local.ts`.
+  `cyclists.ts`, `more.ts`, `avenue.ts`, `extra.ts`; `hard.ts` adds authored hard questions and compound scenes using existing trajectories.
+  Helpers (`ask`, `drive`, `walk`, stop lines, lanes, `uTurnCorners`) in `local.ts`.
 - Node turns: `straight`, `left`, `right`, `uturn` (a teardrop loop inside the intersection; the route then returns along the
   same street through the previous node, which must have no traffic light, and the block between them must have no ticket).
 - Sites: `start` (yard exit), `node` (intersection; with `lanes` — on an avenue), `block` (between intersections of a street),
@@ -21,6 +22,7 @@ at each situation the world pauses and the player answers a ticket. A wrong answ
 - City: 8×8 grid, streets have one lane each way; avenues (`CITY.avenuesX/Z`: X = 270 — 2 lanes, Z = −90 — 3 lanes) have a bike lane
   at the curb. Lane helpers in `src/sim/city.ts`.
 - `src/tickets/plan.ts` — run generator: draws `RUN_SIZE` (20) tickets (unseen first), lays out a route on the city grid
+  (`createDifficultyRunPlan` restricts the entire draw and replacement pool to the selected difficulty),
   (backtracking with a small lookahead, no node visited twice except on the way back after a U-turn), plans the ego's lane on avenues (lane changes before turns and
   templates) and places templates into world coordinates → `RunPlan` (route, tickets, world features). On a left turn or
   U-turn the ego waits in the centre of the intersection instead of at the stop line (`waitPoint`) when entry is allowed

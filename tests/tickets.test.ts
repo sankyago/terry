@@ -3,8 +3,8 @@ import { SIM_DT } from '../src/config';
 import type { SimEvent } from '../src/sim/sim';
 import { Sim } from '../src/sim/sim';
 import type { RunPlan } from '../src/tickets/plan';
-import { RUN_SIZE, createRunPlan, drawTickets, planFor, waitPoint, withInnocent } from '../src/tickets/plan';
-import { TICKETS } from '../src/tickets/tickets';
+import { RUN_SIZE, createDifficultyRunPlan, createRunPlan, drawTickets, planFor, waitPoint, withInnocent } from '../src/tickets/plan';
+import { DIFFICULTIES, TICKETS, ticketsForDifficulty } from '../src/tickets/tickets';
 import type { NodeTemplate } from '../src/tickets/types';
 import { seededRandom } from '../src/sim/random';
 import { curvatureAt } from '../src/sim/path';
@@ -50,10 +50,29 @@ function cleanRun(plan: RunPlan) {
 }
 
 describe('банк білетів', () => {
-  it('150 білетів з унікальними id і рівно однією правильною відповіддю', () => {
-    expect(TICKETS.length).toBe(150);
+  it('250 білетів з унікальними id й питаннями та рівно однією правильною відповіддю', () => {
+    expect(TICKETS.length).toBe(250);
     expect(new Set(TICKETS.map((t) => t.id)).size).toBe(TICKETS.length);
+    expect(new Set(TICKETS.map((t) => t.question)).size).toBe(TICKETS.length);
     for (const t of TICKETS) expect(t.options.filter((o) => o.correct).length, t.id).toBe(1);
+  });
+
+  it('три окремі рівні: 50 легких, 100 середніх і 100 нових складних', () => {
+    expect(ticketsForDifficulty('easy')).toHaveLength(50);
+    expect(ticketsForDifficulty('medium')).toHaveLength(100);
+    const hard = ticketsForDifficulty('hard');
+    expect(hard).toHaveLength(100);
+    expect(hard.every((t) => t.id.startsWith('hard-') && t.explanation && t.rule)).toBe(true);
+    expect(DIFFICULTIES.flatMap((level) => ticketsForDifficulty(level.id))).toHaveLength(TICKETS.length);
+  });
+
+  it('білети без зебри не отримують її автоматично навіть біля світлофора', () => {
+    for (const id of ['hard-turn-no-zebra', 'hard-main-left-no-zebra', 'hard-blind-not-only-zebra']) {
+      const plan = planFor([TICKETS.find((t) => t.id === id)!]);
+      expect(plan.world.crosswalks, id).toHaveLength(0);
+    }
+    const regular = planFor([TICKETS.find((t) => t.id === 'signal-right-turn-ped')!]);
+    expect(regular.world.crosswalks.length).toBeGreaterThan(0);
   });
 });
 
@@ -75,7 +94,10 @@ describe('момент рішення', () => {
 
   it('транспорт у момент рішення поруч із точкою конфлікту, а не за кадром', () => {
     // Другі в черзі навмисно далі: їх видно, але вони під'їдуть пізніше.
-    const second = new Set(['signal-left-oncoming-two:car2', 'giveway-straight-two:right', 'yard-left-two-cars:far']);
+    const second = new Set([
+      'signal-left-oncoming-two:car2', 'giveway-straight-two:right', 'yard-left-two-cars:far',
+      'hard-left-second-oncoming:car2', 'hard-main-both-streams:right', 'hard-compound-yard-three:far',
+    ]);
     for (const t of TICKETS)
       for (const a of t.actors) {
         if (a.parked || a.kind === 'pedestrian' || second.has(`${t.id}:${a.id}`)) continue;
@@ -102,11 +124,41 @@ describe('генератор маршруту', () => {
     expect(a).not.toBe(b);
   });
 
-  it('спершу видає ще не бачені білети: за 9 заїздів — усі 150 (виїздів із двору 9, а в заїзді — щонайбільше один)', () => {
+  it('спершу видає ще не бачені білети з усього банку, включно з виїздами з двору', () => {
     const seen = new Set<string>();
-    for (let k = 0; k < 9; k++) for (const id of createRunPlan(100 + k, seen).ids) seen.add(id);
+    for (let k = 0; k < 20 && seen.size < TICKETS.length; k++) for (const id of createRunPlan(100 + k, seen).ids) seen.add(id);
     expect(seen.size).toBe(TICKETS.length);
   });
+
+  for (const { id: difficulty } of DIFFICULTIES) {
+    it(`${difficulty}: маршрут містить лише обраний рівень, навіть після вичерпання його колоди`, () => {
+      const pool = ticketsForDifficulty(difficulty);
+      const seen = new Set(TICKETS.map((t) => t.id));
+      for (let seed = 1; seed <= 15; seed++) {
+        const plan = createDifficultyRunPlan(seed, difficulty, seen, 0);
+        expect(plan.difficulty).toBe(difficulty);
+        expect(plan.ids).toHaveLength(RUN_SIZE);
+        expect(new Set(plan.ids).size).toBe(RUN_SIZE);
+        expect(plan.ids.every((id) => pool.some((t) => t.id === id))).toBe(true);
+      }
+    });
+
+    it(`${difficulty}: бачені білети іншого рівня не заважають отримувати нові`, () => {
+      const pool = ticketsForDifficulty(difficulty);
+      const seen = new Set(TICKETS.filter((t) => t.difficulty !== difficulty).map((t) => t.id));
+      const first = createDifficultyRunPlan(71, difficulty, seen, 0);
+      first.ids.forEach((id) => seen.add(id));
+      const second = createDifficultyRunPlan(72, difficulty, seen, 0);
+      expect(second.ids.every((id) => !first.ids.includes(id))).toBe(true);
+      expect(second.ids.every((id) => pool.some((t) => t.id === id))).toBe(true);
+    });
+
+    for (const seed of [17, 29, 43]) {
+      it(`${difficulty}, заїзд ${seed}: усі правильні відповіді — без ДТП до фінішу`, () => {
+        cleanRun(createDifficultyRunPlan(seed, difficulty, new Set(), 0));
+      });
+    }
+  }
 
   it('траєкторія учня плавна: без різких зламів і розворотів (перестроювання, повороти)', () => {
     for (let seed = 1; seed <= 40; seed++) {

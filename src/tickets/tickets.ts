@@ -4,7 +4,8 @@ import { AVENUE } from './avenue';
 import { CYCLISTS } from './cyclists';
 import { EXTRA } from './extra';
 import { MORE } from './more';
-import type { TicketTemplate } from './types';
+import { createHardTickets } from './hard';
+import type { Difficulty, RankedTicketTemplate, TicketTemplate } from './types';
 
 export type { ActorSpec, LightScript, Ticket, TicketOption, TicketTemplate } from './types';
 
@@ -1134,7 +1135,23 @@ const BLOCK: TicketTemplate[] = [
 ];
 
 /** Усі білети. Генератор маршруту обирає з них і розставляє містом. */
-export const TICKETS: TicketTemplate[] = [...START, ...EQUAL, ...PRIORITY, ...SIGNAL, ...BLOCK, ...CYCLISTS, ...MORE, ...AVENUE, ...EXTRA];
+const EASY = [...START, ...EQUAL, ...PRIORITY, ...SIGNAL, ...BLOCK];
+const MEDIUM = [...CYCLISTS, ...MORE, ...AVENUE, ...EXTRA];
+export const TICKETS: RankedTicketTemplate[] = [
+  ...EASY.map((t): RankedTicketTemplate => ({ ...t, difficulty: 'easy' })),
+  ...MEDIUM.map((t): RankedTicketTemplate => ({ ...t, difficulty: 'medium' })),
+  ...createHardTickets([...EASY, ...MEDIUM]),
+];
+
+export const DIFFICULTIES: Array<{ id: Difficulty; title: string; text: string }> = [
+  { id: 'easy', title: 'Легкий', text: 'Основи: пріоритет, знаки й прості дорожні ситуації.' },
+  { id: 'medium', title: 'Середній', text: 'Більше учасників, велосипедисти, проспекти й перестроювання.' },
+  { id: 'hard', title: 'Складний', text: 'Лише складні білети: поєднання правил, винятки та неочевидні рішення.' },
+];
+
+export function ticketsForDifficulty(difficulty: Difficulty): RankedTicketTemplate[] {
+  return TICKETS.filter((t) => t.difficulty === difficulty);
+}
 
 /** Центр авто, коли передній бампер на лінії — використовується в тестах і для камери. */
 export const EGO_HALF_LENGTH = CAR.length / 2;

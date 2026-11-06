@@ -6,7 +6,8 @@ import { resolveQuality } from '../scene/quality';
 import type { Mode, Progress, RunResult, Settings } from '../storage/storage';
 import { load, markSeen, recordResult, save } from '../storage/storage';
 import type { RunPlan } from '../tickets/plan';
-import { createRunPlan, planForIds, withInnocent } from '../tickets/plan';
+import { createDifficultyRunPlan, planForIds, withInnocent } from '../tickets/plan';
+import type { Difficulty } from '../tickets/types';
 import { ACCIDENT_STEPS } from '../tickets/procedure';
 import { TICKETS } from '../tickets/tickets';
 import { Hud } from './Hud';
@@ -23,10 +24,10 @@ const DEBUG = params.has('debug');
  * Маршрут нового заїзду: випадкові білети, спершу ще не бачені.
  * У режимі налагодження ?tickets=id1,id2 задає білети й порядок, ?seed= — генератор.
  */
-function nextPlan(seen: string[]): RunPlan {
+function nextPlan(seen: string[], difficulty: Difficulty): RunPlan {
   const seed = DEBUG && params.has('seed') ? Number(params.get('seed')) : Math.floor(Math.random() * 1e9);
   const ids = DEBUG ? params.get('tickets') : null;
-  const plan = ids ? planForIds(ids.split(','), seed) : createRunPlan(seed, new Set(seen));
+  const plan = ids ? planForIds(ids.split(','), seed) : createDifficultyRunPlan(seed, difficulty, new Set(seen));
   // ?innocent=N — у білеті N (з нуля) учня гарантовано вдарять ззаду.
   return DEBUG && params.has('innocent') ? withInnocent(plan, Number(params.get('innocent'))) : plan;
 }
@@ -89,7 +90,7 @@ export function App() {
     let g: Game;
     try {
       const s = settingsRef.current;
-      g = new Game(canvas, { plan: nextPlan(progressRef.current.seen), quality, mode: s.mode, camera: s.camera, sound: s.sound });
+      g = new Game(canvas, { plan: nextPlan(progressRef.current.seen, s.difficulty), quality, mode: s.mode, camera: s.camera, sound: s.sound });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       return;
@@ -173,7 +174,9 @@ export function App() {
     game?.setMuted(!settings.sound);
     game?.setCameraMode(settings.camera);
     if (!game) return;
-    const plan = freshPlan.current ? game.plan : nextPlan(progress.seen);
+    const plan = freshPlan.current && (game.plan.difficulty === settings.difficulty || (DEBUG && params.has('tickets')))
+      ? game.plan
+      : nextPlan(progress.seen, settings.difficulty);
     freshPlan.current = false;
     game.start(mode, plan);
     setProgress((p) => markSeen(p, plan.ids, TICKETS.length));
@@ -212,6 +215,7 @@ export function App() {
         <Hud
           hud={hud}
           mode={mode}
+          difficulty={settings.difficulty}
           camera={settings.camera}
           sound={settings.sound}
           showFps={settings.showFps}

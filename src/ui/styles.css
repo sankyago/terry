@@ -188,6 +188,17 @@ p {
 .mode-text {
   margin-top: -6px;
 }
+.difficulty-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.difficulty-levels {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.difficulty-levels button {
+  font-size: 14px;
+}
 
 .primary,
 .secondary {
