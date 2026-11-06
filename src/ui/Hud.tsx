@@ -1,10 +1,13 @@
 import type { HudSnapshot } from '../game/Game';
 import type { CameraMode, Mode } from '../storage/storage';
+import type { Difficulty } from '../tickets/types';
+import { DIFFICULTIES } from '../tickets/tickets';
 import { CameraIcon, CompassIcon, PauseIcon, SoundOffIcon, SoundOnIcon } from './icons';
 
 interface Props {
   hud: HudSnapshot;
   mode: Mode;
+  difficulty: Difficulty;
   camera: CameraMode;
   sound: boolean;
   showFps: boolean;
@@ -13,7 +16,7 @@ interface Props {
   onSound(): void;
 }
 
-export function Hud({ hud, mode, camera, sound, showFps, onPause, onCamera, onSound }: Props) {
+export function Hud({ hud, mode, difficulty, camera, sound, showFps, onPause, onCamera, onSound }: Props) {
   return (
     <div className="hud">
       <div className="hud-left">
@@ -34,7 +37,9 @@ export function Hud({ hud, mode, camera, sound, showFps, onPause, onCamera, onSo
       </div>
 
       <div className="hud-center glass progress" aria-label={`Білет ${hud.ticket + 1} з ${hud.total}`}>
-        <span className="eyebrow">{mode === 'training' ? 'Навчання' : 'Іспит'}</span>
+        <span className="eyebrow">
+          {mode === 'training' ? 'Навчання' : 'Іспит'} · {DIFFICULTIES.find((level) => level.id === difficulty)!.title}
+        </span>
         <ol className="dots">
           {hud.marks.map((m, i) => (
             <li key={i} className={`${m ?? ''} ${i === hud.ticket && !m ? 'current' : ''}`}>

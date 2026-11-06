@@ -10,8 +10,8 @@ import type { Vec2 } from '../sim/math';
 import { forwardOf, rightOf } from '../sim/math';
 import { seededRandom } from '../sim/random';
 import { O, R_LEFT, R_RIGHT, exitArm, nodeCrosswalks, priorityLines, prioritySigns, uTurnCorners } from './local';
-import { TICKETS } from './tickets';
-import type { ActorSpec, AvenueTemplate, LocalLights, NodeTemplate, Ticket, TicketTemplate } from './types';
+import { TICKETS, ticketsForDifficulty } from './tickets';
+import type { ActorSpec, AvenueTemplate, Difficulty, LocalLights, NodeTemplate, Ticket, TicketTemplate } from './types';
 
 /** Скільки білетів у одному маршруті. */
 export const RUN_SIZE = 20;
@@ -24,6 +24,7 @@ export const INNOCENT_CHANCE = 0.05;
  */
 export interface RunPlan {
   seed: number;
+  difficulty?: Difficulty;
   ids: string[];
   route: Corner[];
   finish: Vec2;
@@ -417,7 +418,7 @@ function realize(placements: Placement[], seed: number): RunPlan {
         for (const s of local.signs) world.signs.push({ ...s, ...toWorld(f, s), facing: s.facing + f.heading });
         for (const l of local.lines) world.lines.push({ ...l, ...toWorld(f, l), heading: l.heading + f.heading });
         addTemplate(
-          { ...t, stopLine: waitPoint(t), crosswalks: [...(local.signal ? nodeCrosswalks(own, cross) : []), ...(t.crosswalks ?? [])] },
+          { ...t, stopLine: waitPoint(t), crosswalks: [...(local.signal && t.autoCrosswalks !== false ? nodeCrosswalks(own, cross) : []), ...(t.crosswalks ?? [])] },
           f,
           own,
           cross,
@@ -599,7 +600,7 @@ export function createRunPlan(
   seed: number,
   seen: ReadonlySet<string> = new Set(),
   count = RUN_SIZE,
-  pool = TICKETS,
+  pool: TicketTemplate[] = TICKETS,
   innocentChance = INNOCENT_CHANCE,
 ): RunPlan {
   const rnd = seededRandom(seed);
@@ -614,6 +615,16 @@ export function createRunPlan(
     if (placements) return pickInnocent(realize(placements, seed), seededRandom(seed * 13 + 7), innocentChance);
   }
   throw new Error('Не вдалося прокласти маршрут');
+}
+
+/** Усі добори й заміни під час прокладання маршруту залишаються в межах обраного рівня. */
+export function createDifficultyRunPlan(
+  seed: number,
+  difficulty: Difficulty,
+  seen: ReadonlySet<string> = new Set(),
+  innocentChance = INNOCENT_CHANCE,
+): RunPlan {
+  return { ...createRunPlan(seed, seen, RUN_SIZE, ticketsForDifficulty(difficulty), innocentChance), difficulty };
 }
 
 /** План за списком ідентифікаторів (для ?tickets=… у режимі налагодження). */

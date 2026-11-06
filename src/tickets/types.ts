@@ -67,6 +67,7 @@ export interface Ticket {
 // повертає й переносить шаблон у потрібне місце міста.
 
 export type Arm = 'N' | 'E' | 'S' | 'W';
+export type Difficulty = 'easy' | 'medium' | 'hard';
 /** uturn — розворот на перехресті. */
 export type Turn = 'straight' | 'left' | 'right' | 'uturn';
 
@@ -111,6 +112,8 @@ export interface NodeTemplate extends TemplateBase {
   site: 'node';
   turn: Turn;
   control: Control;
+  /** Не додавати типові зебри біля світлофора, якщо умова явно задає перехрестя без них. */
+  autoCrosswalks?: boolean;
   /** Початковий стан світлофора (за замовчуванням зелений для учня). */
   initial?: LocalLights;
   lights?: Array<{ t: number; state: Partial<LocalLights> }>;
@@ -147,3 +150,5 @@ export interface StartTemplate extends TemplateBase {
 }
 
 export type TicketTemplate = NodeTemplate | BlockTemplate | AvenueTemplate | StartTemplate;
+
+export type RankedTicketTemplate = TicketTemplate & { difficulty: Difficulty };

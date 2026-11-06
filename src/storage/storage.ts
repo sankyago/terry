@@ -1,9 +1,12 @@
+import type { Difficulty } from '../tickets/types';
+
 export type Mode = 'training' | 'exam';
 export type CameraMode = 'follow' | 'north';
 export type QualitySetting = 'auto' | 'low' | 'high';
 
 export interface Settings {
   mode: Mode;
+  difficulty: Difficulty;
   camera: CameraMode;
   sound: boolean;
   quality: QualitySetting;
@@ -57,6 +60,7 @@ const KEY = 'cruise.v2';
 
 export const DEFAULT_SETTINGS: Settings = {
   mode: 'training',
+  difficulty: 'medium',
   camera: 'follow',
   sound: true,
   quality: 'auto',
@@ -96,8 +100,15 @@ export function load(store: KeyValueStore | null = defaultStore()): Stored {
     if (!raw) return fallback;
     const data = JSON.parse(raw) as Partial<Stored>;
     const p = emptyProgress();
+    const difficulty = data.settings?.difficulty;
     return {
-      settings: { ...DEFAULT_SETTINGS, ...(data.settings ?? {}) },
+      settings: {
+        ...DEFAULT_SETTINGS,
+        ...(data.settings ?? {}),
+        difficulty: difficulty === 'easy' || difficulty === 'medium' || difficulty === 'hard'
+          ? difficulty
+          : DEFAULT_SETTINGS.difficulty,
+      },
       progress: {
         training: { ...p.training, ...(data.progress?.training ?? {}) },
         exam: { ...p.exam, ...(data.progress?.exam ?? {}) },
