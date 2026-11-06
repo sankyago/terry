@@ -1,7 +1,7 @@
 # Cruise — interactive driving-theory tickets
 
 Babylon.js + React + Vite + TypeScript. The car drives itself through a small city (camera above at 45°);
-at each situation the world pauses and the player answers a ticket. A wrong answer plays out as a crash.
+at each situation the world pauses and the player answers a ticket. Unsafe wrong answers play out as crashes; an incorrect priority assessment without an unsafe maneuver shows mistake feedback.
 
 ## Commands
 
@@ -11,9 +11,12 @@ at each situation the world pauses and the player answers a ticket. A wrong answ
 
 ## Layout
 
-- `src/tickets/tickets.ts` — the bank of ticket templates (250: 50 easy, 100 medium, 100 hard) in local coordinates (ego approaches from the south, +X = right):
+- `src/tickets/tickets.ts` — the bank of ticket templates (350: 80 easy, 130 medium, 140 hard) in local coordinates (ego approaches from the south, +X = right):
   question, options, explanation, ПДР rule, stop line, actors, signs, props, bike paths, light scripts. More templates in
   `cyclists.ts`, `more.ts`, `avenue.ts`, `extra.ts`; `hard.ts` adds authored hard questions and compound scenes using existing trajectories.
+  `priority.ts` adds first/middle passage scenes, `retained.ts` selects 70 original last-place scenes,
+  and `passage.ts` classifies passage from actors (156 first, 124 middle, 70 last).
+  Each random run contains strictly fewer than 30% last-place tickets (at most 5/20), including replacement draws.
   Helpers (`ask`, `drive`, `walk`, stop lines, lanes, `uTurnCorners`) in `local.ts`.
 - Node turns: `straight`, `left`, `right`, `uturn` (a teardrop loop inside the intersection; the route then returns along the
   same street through the previous node, which must have no traffic light, and the block between them must have no ticket).
@@ -31,7 +34,8 @@ at each situation the world pauses and the player answers a ticket. A wrong answ
   the ego after a correct answer, and the game runs the step-by-step accident procedure (`src/tickets/procedure.ts`, ПДР 2.10/2.11).
 - `src/sim/` — pure, deterministic simulation (no Babylon/DOM). `new Sim(plan)`; `sim.ts` drives the ego on autopilot, spawns
   each ticket's actors so they reach their `gap` from the conflict point exactly at the decision moment, and
-  times wrong answers so the crash always happens. `snapshot()`/`restore()` replay a situation.
+  keeps `yieldsToEgo` actors stopped until the ego clears their conflict, and times unsafe wrong answers for a crash.
+  `mistakeOnly` wrong options freeze in the `mistake` phase for feedback without a fabricated crash. `snapshot()`/`restore()` replay a situation.
 - `src/scene/` — procedural low-poly city (rebuilt per run from `plan.world`), vehicles, pedestrians, crash effects, decision guides.
   `vehicleModels.ts` — car bodies (Audi A5 coupé for the ego + sedan/hatch/wagon/SUV/van for traffic), ambulance, bus;
   `geometry.ts` — `FlatGeometry`: flat-shaded lofts through cross-sections, boxes, quads (one mesh per material).
@@ -42,7 +46,7 @@ at each situation the world pauses and the player answers a ticket. A wrong answ
 - UI text, comments and test names are in Ukrainian; keep it that way.
 - Coordinates: heading 0 = +Z, positive heading turns right (+X); right-hand traffic, lane offset 1.75 m.
 - After changing a ticket, run `npm test`: `tests/tickets.test.ts` places every template on its own route and checks
-  every wrong option crashes and the correct one does not, that the at-no-fault variant crashes only after a correct answer;
+  unsafe wrong options crash, priority mistakes show feedback without a crash, correct answers respect actual passage order, that the at-no-fault variant crashes only after a correct answer;
   it also runs several full random runs without a crash and checks the ego's path has no kinks.
 - An actor's `gap` is about 1.3 s of its speed (cars 13–18 m): farther away it is off screen at the decision moment.
 - Actors that end up driving ahead of the ego in its lane must be faster than it (cars accelerate after the conflict point);

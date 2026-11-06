@@ -36,7 +36,7 @@ import { makeMaterial } from '../scene/palette';
 import { buildResult } from '../storage/storage';
 
 /** procedure — після ДТП не з вини учня: покрокові білети про дії на місці пригоди. */
-export type GameStatus = 'menu' | 'playing' | 'decision' | 'crashed' | 'procedure' | 'paused' | 'finished';
+export type GameStatus = 'menu' | 'playing' | 'decision' | 'crashed' | 'mistaken' | 'procedure' | 'paused' | 'finished';
 export type TicketMark = 'ok' | 'fail' | null;
 
 export interface HudSnapshot {
@@ -52,6 +52,7 @@ export type GameEvent =
   | { type: 'status'; status: GameStatus }
   | { type: 'decision'; ticket: number; retry: boolean }
   | { type: 'answer'; ticket: number; option: number; correct: boolean; retry: boolean }
+  | { type: 'mistake'; ticket: number; option: number }
   | { type: 'crash'; ticket: number; kind: ActorKind; innocent: boolean }
   | { type: 'procedure'; step: number }
   | { type: 'procedureAnswer'; step: number; option: number; correct: boolean }
@@ -181,7 +182,7 @@ export class Game {
         if (this.status === 'paused') this.resume();
         else this.pause();
       } else if (e.key === 'c' || e.key === 'C' || e.key === 'с' || e.key === 'С') this.toggleCamera();
-      else if ((e.key === 'Enter' || e.key === ' ') && this.status === 'crashed') {
+      else if ((e.key === 'Enter' || e.key === ' ') && (this.status === 'crashed' || this.status === 'mistaken')) {
         e.preventDefault();
         this.continueAfterCrash();
       }
@@ -290,7 +291,7 @@ export class Game {
   }
 
   pause() {
-    if (this.status !== 'playing' && this.status !== 'decision' && this.status !== 'crashed' && this.status !== 'procedure') return;
+    if (this.status !== 'playing' && this.status !== 'decision' && this.status !== 'crashed' && this.status !== 'mistaken' && this.status !== 'procedure') return;
     this.pausedFrom = this.status;
     this.audio.suspend();
     this.setStatus('paused');
@@ -328,13 +329,17 @@ export class Game {
     this.guides.hide();
     if (correct) this.audio.success();
     this.emit({ type: 'answer', ticket, option, correct, retry: this.retrying });
-    this.setStatus('playing');
+    if (this.sim.state.phase === 'mistake') {
+      this.audio.fail();
+      this.setStatus('mistaken');
+      this.emit({ type: 'mistake', ticket, option });
+    } else this.setStatus('playing');
     this.emitHud(true);
   }
 
   /** Після ДТП: повернутися в момент рішення й обрати ще раз. */
   retryTicket() {
-    if (this.status !== 'crashed' || !this.snapshotAtDecision) return;
+    if ((this.status !== 'crashed' && this.status !== 'mistaken') || !this.snapshotAtDecision) return;
     this.restoreDecision();
     this.retrying = true;
     this.showGuides();
@@ -344,7 +349,7 @@ export class Game {
 
   /** Після ДТП: показати, як треба було діяти, і їхати далі. */
   continueAfterCrash() {
-    if (this.status !== 'crashed' || !this.snapshotAtDecision) return;
+    if ((this.status !== 'crashed' && this.status !== 'mistaken') || !this.snapshotAtDecision) return;
     this.restoreDecision();
     this.sim.answer(this.sim.correctOption());
     this.retrying = false;
@@ -578,7 +583,7 @@ export class Game {
     const w = this.engine.getRenderWidth();
     const h = this.engine.getRenderHeight();
     this.rig.aspect = w / Math.max(1, h);
-    const card = this.status === 'decision' || this.status === 'crashed' || this.status === 'procedure';
+    const card = this.status === 'decision' || this.status === 'crashed' || this.status === 'mistaken' || this.status === 'procedure';
     const wide = (this.scene.getEngine().getRenderingCanvas()?.clientWidth ?? 0) > 640;
     this.rig.update(egoPose, dt, {
       focus: this.focus(),

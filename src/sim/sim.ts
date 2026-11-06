@@ -14,11 +14,13 @@ import { curvatureAt, findConflict, nearestOnPath, poseOnPath, roundedPath } fro
 /**
  * driving  — автопілот їде до наступної ситуації;
  * decision — авто стоїть, світ на паузі, учень обирає відповідь;
- * yielding — правильна відповідь: чекаємо, доки звільниться дорога;
+ * yielding — пропускаємо лише тих, хто має перевагу;
+ * proceeding — проїжджаємо перед тими, хто має поступитися;
+ * mistake — помилка в черговості без небезпечного маневру;
  * wrongGo  — неправильна відповідь: авто рушає й потрапляє в ДТП;
  * crash    — анімація ДТП.
  */
-export type SimPhase = 'driving' | 'decision' | 'yielding' | 'wrongGo' | 'crash' | 'finished';
+export type SimPhase = 'driving' | 'decision' | 'yielding' | 'proceeding' | 'mistake' | 'wrongGo' | 'crash' | 'finished';
 export type IndicatorState = 'none' | 'left' | 'right' | 'hazard';
 
 /** Вільне тіло після удару: рухається з тертям і обертається. */
@@ -281,11 +283,18 @@ export class Sim {
     const correct = t.ticket.options[option]?.correct ?? false;
     st.answer = option;
     st.phaseTime = 0;
-    for (const a of st.actors)
-      if (a.waiting && a.ticket === st.ticket) {
+    if (!correct && t.ticket.options[option]?.mistakeOnly) {
+      st.phase = 'mistake';
+      return false;
+    }
+    for (const pa of t.actors) {
+      if (pa.spec.yieldsToEgo) continue;
+      const a = st.actors.find((a) => a.id === `${st.ticket}:${pa.spec.id}`);
+      if (a?.waiting) {
         a.waiting = false;
-        a.v = t.actors.find((pa) => `${st.ticket}:${pa.spec.id}` === a.id)?.spec.speed ?? 0;
+        a.v = pa.spec.speed;
       }
+    }
     if (correct) {
       st.phase = 'yielding';
       return true;
@@ -293,7 +302,7 @@ export class Sim {
     st.phase = 'wrongGo';
     // Учасник, з яким неминуче ДТП, приходить у точку конфлікту одночасно з учнем.
     for (const pa of t.actors) {
-      if (pa.spec.parked) continue;
+      if (pa.spec.parked || pa.spec.yieldsToEgo) continue;
       if (pa.spec.atFault) {
         // Учень рушив сам — водій ззаду встигає загальмувати.
         const a = st.actors.find((x) => x.id === `${st.ticket}:${pa.spec.id}`);
@@ -358,8 +367,8 @@ export class Sim {
         ticket: index,
         kind: pa.spec.kind,
         color: pa.spec.color ?? SPEC_COLORS[pa.spec.kind],
-        s: parked ? 0 : pa.spec.departs ? pa.sAtDecision : pa.sAtDecision - pa.spec.speed * T,
-        v: parked || pa.spec.departs ? 0 : pa.spec.speed,
+        s: parked ? 0 : pa.spec.departs || pa.spec.yieldsToEgo ? pa.sAtDecision : pa.sAtDecision - pa.spec.speed * T,
+        v: parked || pa.spec.departs || pa.spec.yieldsToEgo ? 0 : pa.spec.speed,
         x: 0,
         z: 0,
         heading: 0,
@@ -372,7 +381,7 @@ export class Sim {
         reverse: pa.spec.reverse ?? false,
         atFault: pa.spec.atFault ?? false,
         stopping: false,
-        waiting: pa.spec.departs ?? false,
+        waiting: !!(pa.spec.departs || pa.spec.yieldsToEgo),
         body: null,
         hitTime: -1,
       };
@@ -447,7 +456,7 @@ export class Sim {
     this.dt = dt;
     const st = this.state;
     const events: SimEvent[] = [];
-    if (st.phase === 'decision' || st.phase === 'finished') return events;
+    if (st.phase === 'decision' || st.phase === 'mistake' || st.phase === 'finished') return events;
     st.time += dt;
     st.phaseTime += dt;
     this.updateLights();
@@ -500,11 +509,43 @@ export class Sim {
         const clear =
           !t ||
           t.actors.every((pa) => {
-            if (pa.spec.parked) return true;
+            if (pa.spec.parked || pa.spec.yieldsToEgo) return true;
             const a = st.actors.find((x) => x.id === `${st.ticket}:${pa.spec.id}`);
             return !a || a.s > pa.clearS;
           });
         if (clear && st.phaseTime >= DRIVE.yieldMinWait) {
+          if (t?.actors.some((pa) => pa.spec.yieldsToEgo)) {
+            st.phase = 'proceeding';
+            st.phaseTime = 0;
+            break;
+          }
+          events.push({ type: 'ticketCleared', ticket: st.ticket });
+          st.phase = 'driving';
+          st.phaseTime = 0;
+          st.ticket++;
+          this.activate(st.ticket);
+        }
+        break;
+      }
+      case 'proceeding': {
+        // Білет залишається поточним протягом проїзду: зіткнення ще перевіряються.
+        const r = this.planStep(e, dt, this.prepared[st.ticket + 1]?.stopS ?? this.finishS);
+        e.braking = r.braking;
+        let released = true;
+        for (const pa of t?.actors ?? []) {
+          if (!pa.spec.yieldsToEgo) continue;
+          const a = st.actors.find((x) => x.id === `${st.ticket}:${pa.spec.id}`);
+          // Задній бампер учня з запасом залишив точку конфлікту.
+          if (e.s <= pa.egoConflictS + CAR.length + 4) {
+            released = false;
+            continue;
+          }
+          if (a?.waiting) {
+            a.waiting = false;
+            a.v = pa.spec.speed;
+          }
+        }
+        if (released) {
           events.push({ type: 'ticketCleared', ticket: st.ticket });
           st.phase = 'driving';
           st.phaseTime = 0;
