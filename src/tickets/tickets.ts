@@ -5,6 +5,8 @@ import { CYCLISTS } from './cyclists';
 import { EXTRA } from './extra';
 import { MORE } from './more';
 import { createHardTickets } from './hard';
+import { PRIORITY_TICKETS } from './priority';
+import { RETAINED_LAST } from './retained';
 import type { Difficulty, RankedTicketTemplate, TicketTemplate } from './types';
 
 export type { ActorSpec, LightScript, Ticket, TicketOption, TicketTemplate } from './types';
@@ -1137,10 +1139,15 @@ const BLOCK: TicketTemplate[] = [
 /** Усі білети. Генератор маршруту обирає з них і розставляє містом. */
 const EASY = [...START, ...EQUAL, ...PRIORITY, ...SIGNAL, ...BLOCK];
 const MEDIUM = [...CYCLISTS, ...MORE, ...AVENUE, ...EXTRA];
-export const TICKETS: RankedTicketTemplate[] = [
+const ORIGINAL: RankedTicketTemplate[] = [
   ...EASY.map((t): RankedTicketTemplate => ({ ...t, difficulty: 'easy' })),
   ...MEDIUM.map((t): RankedTicketTemplate => ({ ...t, difficulty: 'medium' })),
   ...createHardTickets([...EASY, ...MEDIUM]),
+];
+
+export const TICKETS: RankedTicketTemplate[] = [
+  ...ORIGINAL.filter((t) => RETAINED_LAST.has(t.id)),
+  ...PRIORITY_TICKETS,
 ];
 
 export const DIFFICULTIES: Array<{ id: Difficulty; title: string; text: string }> = [

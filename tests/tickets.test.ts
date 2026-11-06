@@ -7,6 +7,7 @@ import { RUN_SIZE, createDifficultyRunPlan, createRunPlan, drawTickets, planFor,
 import { DIFFICULTIES, TICKETS, ticketsForDifficulty } from '../src/tickets/tickets';
 import type { NodeTemplate } from '../src/tickets/types';
 import { seededRandom } from '../src/sim/random';
+import { lastPlaceLimit, passagePosition } from '../src/tickets/passage';
 import { curvatureAt } from '../src/sim/path';
 
 /** Крутить симуляцію, доки не з'явиться подія потрібного типу (або не мине ліміт часу). */
@@ -50,20 +51,29 @@ function cleanRun(plan: RunPlan) {
 }
 
 describe('банк білетів', () => {
-  it('250 білетів з унікальними id й питаннями та рівно однією правильною відповіддю', () => {
-    expect(TICKETS.length).toBe(250);
+  it('350 білетів з унікальними id й питаннями та рівно однією правильною відповіддю', () => {
+    expect(TICKETS.length).toBe(350);
     expect(new Set(TICKETS.map((t) => t.id)).size).toBe(TICKETS.length);
     expect(new Set(TICKETS.map((t) => t.question)).size).toBe(TICKETS.length);
     for (const t of TICKETS) expect(t.options.filter((o) => o.correct).length, t.id).toBe(1);
   });
 
-  it('три окремі рівні: 50 легких, 100 середніх і 100 нових складних', () => {
-    expect(ticketsForDifficulty('easy')).toHaveLength(50);
-    expect(ticketsForDifficulty('medium')).toHaveLength(100);
+  it('три окремі рівні: 80 легких, 130 середніх і 140 складних', () => {
+    expect(ticketsForDifficulty('easy')).toHaveLength(80);
+    expect(ticketsForDifficulty('medium')).toHaveLength(130);
     const hard = ticketsForDifficulty('hard');
-    expect(hard).toHaveLength(100);
+    expect(hard).toHaveLength(140);
     expect(hard.every((t) => t.id.startsWith('hard-') && t.explanation && t.rule)).toBe(true);
     expect(DIFFICULTIES.flatMap((level) => ticketsForDifficulty(level.id))).toHaveLength(TICKETS.length);
+  });
+
+  it('менше 30 % останнього місця в усьому банку й на кожному рівні', () => {
+    for (const pool of [TICKETS, ...DIFFICULTIES.map((d) => ticketsForDifficulty(d.id))]) {
+      expect(pool.filter((t) => passagePosition(t) === 'last').length).toBeLessThan(pool.length * 0.3);
+      expect(pool.some((t) => passagePosition(t) === 'first')).toBe(true);
+      if (pool.some((t) => t.difficulty !== 'easy'))
+        expect(pool.some((t) => passagePosition(t) === 'middle')).toBe(true);
+    }
   });
 
   it('білети без зебри не отримують її автоматично навіть біля світлофора', () => {
@@ -126,7 +136,7 @@ describe('генератор маршруту', () => {
 
   it('спершу видає ще не бачені білети з усього банку, включно з виїздами з двору', () => {
     const seen = new Set<string>();
-    for (let k = 0; k < 20 && seen.size < TICKETS.length; k++) for (const id of createRunPlan(100 + k, seen).ids) seen.add(id);
+    for (let k = 0; k < 40 && seen.size < TICKETS.length; k++) for (const id of createRunPlan(100 + k, seen).ids) seen.add(id);
     expect(seen.size).toBe(TICKETS.length);
   });
 
@@ -168,6 +178,26 @@ describe('генератор маршруту', () => {
     }
   });
 
+  it('квота останнього місця зберігається з новою, частково й повністю пройденою колодою', () => {
+    for (const difficulty of DIFFICULTIES) {
+      const pool = ticketsForDifficulty(difficulty.id);
+      const states = [new Set<string>(), new Set(pool.filter((t) => passagePosition(t) !== 'last').map((t) => t.id)), new Set(TICKETS.map((t) => t.id))];
+      for (const seen of states) for (let seed = 1; seed <= 30; seed++) {
+        const plan = createDifficultyRunPlan(seed, difficulty.id, seen, 0);
+        const picked = plan.ids.map((id) => TICKETS.find((t) => t.id === id)!);
+        expect(picked.filter((t) => passagePosition(t) === 'last').length, `${difficulty.id}/${seed}`).toBeLessThanOrEqual(lastPlaceLimit(RUN_SIZE));
+      }
+    }
+  });
+
+  it('малий заїзд також має строго менше 30 % останнього місця', () => {
+    for (const count of [1, 2, 3, 4, 7, 10, 20]) {
+      const picked = drawTickets(TICKETS, count, seededRandom(count));
+      expect(picked).toHaveLength(count);
+      expect(picked.filter((t) => passagePosition(t) === 'last').length).toBeLessThan(count * 0.3);
+    }
+  });
+
   it('drawTickets не дублює білети', () => {
     const picked = drawTickets(TICKETS, 20, seededRandom(3));
     expect(new Set(picked.map((t) => t.id)).size).toBe(20);
@@ -204,17 +234,56 @@ describe('інтерактивні білети', () => {
         expect(hit?.type).toBe('finished');
       });
 
+      if (passagePosition(template) !== 'last') it('фактичний проїзд: лише учасники з перевагою перед учнем', () => {
+        const sim = reachTicket(plan, 0);
+        const prepared = sim.prepared[0];
+        const crossed = new Map<string, { ego?: number; actor?: number }>();
+        for (const pa of prepared.actors) {
+          const a = sim.state.actors.find((a) => a.id === `0:${pa.spec.id}`)!;
+          if (pa.spec.yieldsToEgo) expect(a.v).toBe(0);
+          crossed.set(pa.spec.id, {});
+        }
+        sim.answer(sim.correctOption());
+        for (let n = 0; n < 60 / SIM_DT; n++) {
+          const ev = sim.step(SIM_DT);
+          expect(ev.some((e) => e.type === 'crash'), template.id).toBe(false);
+          for (const pa of prepared.actors) {
+            const order = crossed.get(pa.spec.id)!;
+            if (sim.state.ego.s >= pa.egoConflictS && order.ego === undefined) order.ego = sim.state.time;
+            const a = sim.state.actors.find((a) => a.id === `0:${pa.spec.id}`);
+            if (a && (pa.spec.yieldsToEgo ? a.v > 0 : a.s >= pa.conflictS) && order.actor === undefined) order.actor = sim.state.time;
+          }
+          if ([...crossed.values()].every((o) => o.ego !== undefined && o.actor !== undefined)) break;
+        }
+        for (const pa of prepared.actors) {
+          const order = crossed.get(pa.spec.id)!;
+          expect(order.ego, `${template.id}/${pa.spec.id}: учень проїхав`).toBeDefined();
+          expect(order.actor, `${template.id}/${pa.spec.id}: учасник проїхав або рушив після учня`).toBeDefined();
+          if (pa.spec.yieldsToEgo) expect(order.ego!).toBeLessThan(order.actor!);
+          else expect(order.actor!).toBeLessThan(order.ego!);
+        }
+      });
+
       template.options.forEach((o, oi) => {
         if (o.correct) return;
-        it(`неправильна відповідь ${oi + 1} — ДТП з учасником ситуації`, () => {
+        it(`неправильна відповідь ${oi + 1} — ${o.mistakeOnly ? 'помилка без ДТП' : 'ДТП з учасником ситуації'}`, () => {
           const sim = reachTicket(plan, 0);
           expect(sim.answer(oi)).toBe(false);
+          if (o.mistakeOnly) {
+            const snapshot = sim.snapshot();
+            expect(snapshot.phase).toBe('mistake');
+            expect(snapshot.crash).toBeNull();
+            expect(sim.step(SIM_DT)).toEqual([]);
+            expect(sim.snapshot()).toEqual(snapshot);
+            return;
+          }
           const { hit } = runUntil(sim, 'crash', 8);
           expect(hit?.type).toBe('crash');
           if (hit?.type === 'crash') {
             expect(hit.crash.actorId.startsWith('0:')).toBe(true);
             const actor = template.actors.find((a) => `0:${a.id}` === hit.crash.actorId);
             expect(actor?.parked ?? false, 'ДТП має бути з учасником, а не з перешкодою').toBe(false);
+            expect(actor?.yieldsToEgo ?? false, 'Учасник без переваги продовжує чекати').toBe(false);
             expect(hit.crash.strength).toBeGreaterThan(1);
           }
           expect(runUntil(sim, 'crashSettled', 5).hit).not.toBeNull();
@@ -224,10 +293,10 @@ describe('інтерактивні білети', () => {
   });
 
   it('знімок у момент рішення дозволяє переграти ситуацію після ДТП', () => {
-    const plan = createRunPlan(5, new Set(), RUN_SIZE, TICKETS, 0);
-    const sim = reachTicket(plan, 2);
+    const plan = planFor([TICKETS.find((t) => t.id === 'equal-right')!]);
+    const sim = reachTicket(plan, 0);
     const snap = sim.snapshot();
-    sim.answer(plan.tickets[2].options.findIndex((o) => !o.correct));
+    sim.answer(plan.tickets[0].options.findIndex((o) => !o.correct));
     runUntil(sim, 'crashSettled');
     sim.restore(snap);
     expect(sim.state.phase).toBe('decision');
@@ -272,9 +341,14 @@ describe('ДТП не з вини учня', () => {
       const plan = withInnocent(planFor([template], 3), 0);
       const sim = reachTicket(plan, 0);
       sim.answer(template.options.findIndex((o) => !o.correct));
-      const { hit } = runUntil(sim, 'crash', 8);
-      expect(hit?.type).toBe('crash');
-      if (hit?.type === 'crash') expect(hit.crash.innocent).toBe(false);
+      if (template.options.find((o) => !o.correct)?.mistakeOnly) {
+        expect(sim.state.phase).toBe('mistake');
+        expect(sim.state.crash).toBeNull();
+      } else {
+        const { hit } = runUntil(sim, 'crash', 8);
+        expect(hit?.type).toBe('crash');
+        if (hit?.type === 'crash') expect(hit.crash.innocent).toBe(false);
+      }
     });
   });
 

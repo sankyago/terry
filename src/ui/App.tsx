@@ -15,10 +15,11 @@ import { PauseMenu } from './PauseMenu';
 import { Results } from './Results';
 import { RotateHint } from './RotateHint';
 import { StartScreen } from './StartScreen';
-import { CrashCard, CrashFlash, Feedback, ProcedureCard, TicketCard } from './TicketCard';
+import { CrashCard, CrashFlash, Feedback, MistakeCard, ProcedureCard, TicketCard } from './TicketCard';
 
 const params = new URLSearchParams(location.search);
 const DEBUG = params.has('debug');
+const ACTIVE_TICKET_IDS = new Set(TICKETS.map((t) => t.id));
 
 /**
  * Маршрут нового заїзду: випадкові білети, спершу ще не бачені.
@@ -51,7 +52,11 @@ interface CrashState {
 }
 
 export function App() {
-  const initial = useMemo(() => load(), []);
+  const initial = useMemo(() => {
+    const stored = load();
+    // Старі вилучені сцени не повинні достроково обнулити колоду нового банку.
+    return { ...stored, progress: { ...stored.progress, seen: stored.progress.seen.filter((id) => ACTIVE_TICKET_IDS.has(id)) } };
+  }, []);
   const [settings, setSettings] = useState<Settings>(initial.settings);
   const [progress, setProgress] = useState<Progress>(initial.progress);
   const [status, setStatus] = useState<GameStatus>('menu');
@@ -59,6 +64,7 @@ export function App() {
   const [decision, setDecision] = useState<Decision | null>(null);
   const [feedback, setFeedback] = useState<FeedbackState | null>(null);
   const [crash, setCrash] = useState<CrashState | null>(null);
+  const [mistake, setMistake] = useState<{ ticket: number; option: number } | null>(null);
   const [flash, setFlash] = useState<{ kind: ActorKind; innocent: boolean; id: number } | null>(null);
   const [procedure, setProcedure] = useState<ProcedureState | null>(null);
   const [result, setResult] = useState<RunResult | null>(null);
@@ -106,11 +112,15 @@ export function App() {
         case 'decision':
           setFeedback(null);
           setCrash(null);
+          setMistake(null);
           setDecision({ ticket: e.ticket, retry: e.retry });
           break;
         case 'answer':
           setDecision(null);
           if (e.correct) setFeedback({ ticket: e.ticket, kind: 'correct' });
+          break;
+        case 'mistake':
+          setMistake({ ticket: e.ticket, option: e.option });
           break;
         case 'crash':
           setFlash({ kind: e.kind, innocent: e.innocent, id: Date.now() });
@@ -129,6 +139,7 @@ export function App() {
           break;
         case 'replay':
           setCrash(null);
+          setMistake(null);
           setFeedback({ ticket: e.ticket, kind: 'replay' });
           break;
         case 'cleared':
@@ -196,7 +207,7 @@ export function App() {
     game?.toMenu();
   };
 
-  const inRun = status === 'playing' || status === 'decision' || status === 'crashed' || status === 'procedure' || status === 'paused';
+  const inRun = status === 'playing' || status === 'decision' || status === 'crashed' || status === 'mistaken' || status === 'procedure' || status === 'paused';
   const mode = settings.mode;
 
   return (
@@ -254,6 +265,15 @@ export function App() {
           ticket={game.tickets[crash.ticket]}
           option={crash.option}
           kind={crash.kind}
+          mode={mode}
+          onRetry={() => game.retryTicket()}
+          onContinue={() => game.continueAfterCrash()}
+        />
+      )}
+      {game && status === 'mistaken' && mistake && (
+        <MistakeCard
+          ticket={game.tickets[mistake.ticket]}
+          option={mistake.option}
           mode={mode}
           onRetry={() => game.retryTicket()}
           onContinue={() => game.continueAfterCrash()}

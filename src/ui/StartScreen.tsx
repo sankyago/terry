@@ -140,7 +140,7 @@ export function StartScreen({ settings, progress, onChange, onStart }: Props) {
           </label>
         </div>
 
-        <p className="muted tiny keys">1–3 — відповідь · C — камера · Esc — пауза · Enter — далі після ДТП</p>
+        <p className="muted tiny keys">1–3 — відповідь · C — камера · Esc — пауза · Enter — далі після помилки</p>
         <p className="muted tiny disclaimer">
           Навчальний тренажер. Ситуації спрощені; пункти ПДР вказано для довідки — звіряйтеся з чинною редакцією.
         </p>

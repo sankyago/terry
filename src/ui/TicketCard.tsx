@@ -216,3 +216,29 @@ export function CrashCard({ ticket, option, kind, mode, onRetry, onContinue }: C
     </div>
   );
 }
+
+/** Неправильна черговість без зіткнення: добровільно поступитися — не те саме, що не мати переваги. */
+export function MistakeCard({ ticket, option, mode, onRetry, onContinue }: Omit<CrashProps, 'kind'>) {
+  const correct = ticket.options.find((o) => o.correct)!;
+  return (
+    <div className="sheet">
+      <div className="glass card crash-card scrollable" role="dialog" aria-label="Помилка в черговості">
+        <span className="eyebrow danger">{ticket.title}</span>
+        <h2>Помилка в черговості проїзду</h2>
+        {option !== null && <div className="answer-row wrong"><span className="muted tiny">Ваша відповідь</span><span>{ticket.options[option].text}</span></div>}
+        <p className="small">Можна добровільно поступитися дорогою, але запитання перевіряє, хто має перевагу за ПДР. Ця відповідь не спричинила ДТП.</p>
+        {mode === 'training' ? (
+          <>
+            <div className="answer-row right"><span className="muted tiny">Правильно</span><span>{correct.text}</span></div>
+            <p className="small">{ticket.explanation}</p>
+            <span className="rule">{ticket.rule}</span>
+          </>
+        ) : <p className="small muted">Правильна черговість і пояснення будуть у результатах іспиту.</p>}
+        <div className="actions">
+          <button className="primary big" onClick={onContinue} autoFocus><PlayIcon width={18} height={18} /> {mode === 'training' ? 'Показати правильно й далі' : 'Далі'}</button>
+          {mode === 'training' && <button className="secondary" onClick={onRetry}><RestartIcon width={18} height={18} /> Переграти ситуацію</button>}
+        </div>
+      </div>
+    </div>
+  );
+}

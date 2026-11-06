@@ -11,6 +11,7 @@ import { forwardOf, rightOf } from '../sim/math';
 import { seededRandom } from '../sim/random';
 import { O, R_LEFT, R_RIGHT, exitArm, nodeCrosswalks, priorityLines, prioritySigns, uTurnCorners } from './local';
 import { TICKETS, ticketsForDifficulty } from './tickets';
+import { lastPlaceLimit, passagePosition } from './passage';
 import type { ActorSpec, AvenueTemplate, Difficulty, LocalLights, NodeTemplate, Ticket, TicketTemplate } from './types';
 
 /** Скільки білетів у одному маршруті. */
@@ -266,17 +267,25 @@ export function drawTickets(pool: TicketTemplate[], count: number, rnd: () => nu
   };
   // Колоду пройдено повністю — починаємо нове коло.
   if (pool.every((t) => seen.has(t.id))) seen = new Set();
+  const limit = lastPlaceLimit(count);
   const fresh = shuffle(pool.filter((t) => !seen.has(t.id)));
   const old = shuffle(pool.filter((t) => seen.has(t.id)));
-  // Виїзд із двору буває лише один на заїзд: якщо є ще не бачений — беремо його, щоб колода не застрягала.
+  // Виїзд із двору буває лише один: новий беремо першим, щоб не застрягло проходження колоди.
   const freshStart = fresh.findIndex((t) => t.site === 'start');
   if (freshStart > 0) fresh.unshift(...fresh.splice(freshStart, 1));
   const picked: TicketTemplate[] = [];
+  let lastCount = 0;
   for (const t of [...fresh, ...old]) {
     if (picked.length >= count) break;
     if (t.site === 'start' && picked.some((p) => p.site === 'start')) continue;
+    const last = passagePosition(t) === 'last';
+    if (last && lastCount >= limit) continue;
     picked.push(t);
+    if (last) lastCount++;
   }
+  if (picked.length !== count)
+    throw new Error(`У банку недостатньо білетів для заїзду з менш ніж 30 % останнього місця (${count})`);
+  shuffle(picked);
   const si = picked.findIndex((t) => t.site === 'start');
   if (si > 0) picked.unshift(...picked.splice(si, 1));
   return picked;
@@ -608,7 +617,11 @@ export function createRunPlan(
     const picked = drawTickets(pool, count, rnd, seen);
     for (let k = 0; k < Math.max(0, attempt - 9); k++) {
       const i = 1 + Math.floor(rnd() * (picked.length - 1));
-      const spare = pool.filter((t) => t.site !== 'start' && !picked.includes(t));
+      const lastWithout = picked.filter((t, j) => j !== i && passagePosition(t) === 'last').length;
+      let spare = pool.filter((t) => t.site !== 'start' && !picked.includes(t)
+        && (passagePosition(t) !== 'last' || lastWithout < lastPlaceLimit(count)));
+      const fresh = spare.filter((t) => !seen.has(t.id));
+      if (fresh.length) spare = fresh;
       if (spare.length) picked[i] = spare[Math.floor(rnd() * spare.length)];
     }
     const placements = layout(picked, seededRandom(seed * 31 + attempt));

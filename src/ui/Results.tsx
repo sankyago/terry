@@ -18,7 +18,7 @@ export function Results({ result, tickets, progress, onRetry, onSwitchMode, onMe
   const mistakes = result.total - result.correct;
   const exam = result.mode === 'exam';
   const ok = exam ? result.passed : mistakes === 0;
-  const title = exam ? (result.passed ? 'Іспит складено' : 'Іспит не складено') : ok ? 'Маршрут без жодного ДТП' : 'Маршрут пройдено';
+  const title = exam ? (result.passed ? 'Іспит складено' : 'Іспит не складено') : ok ? 'Маршрут без помилок' : 'Маршрут пройдено';
   return (
     <div className="overlay center dim">
       <div className={`glass card results ${ok ? 'passed' : exam ? 'failed' : 'passedWithRemarks'} scrollable`} role="dialog" aria-label="Результати">
@@ -38,7 +38,7 @@ export function Results({ result, tickets, progress, onRetry, onSwitchMode, onMe
             </b>
           </div>
           <div>
-            <span className="muted tiny">ДТП</span>
+            <span className="muted tiny">Помилки</span>
             <b>{mistakes}</b>
           </div>
           <div>
